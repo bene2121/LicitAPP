@@ -1,0 +1,19 @@
+<svg width="360" height="100" viewBox="0 0 360 100" xmlns="http://www.w3.org/2000/svg">
+  <title>LicitApp — Licitaciones Colombia</title>
+  <!-- Documento base -->
+  <rect x="8" y="8" width="54" height="70" rx="6" fill="#1E3A5F"/>
+  <!-- Líneas del documento -->
+  <rect x="18" y="24" width="28" height="4" rx="2" fill="white" opacity=".6"/>
+  <rect x="18" y="34" width="22" height="4" rx="2" fill="white" opacity=".45"/>
+  <rect x="18" y="44" width="18" height="4" rx="2" fill="white" opacity=".3"/>
+  <rect x="18" y="54" width="14" height="4" rx="2" fill="white" opacity=".2"/>
+  <!-- Badge check verde -->
+  <circle cx="56" cy="68" r="16" fill="white"/>
+  <circle cx="56" cy="68" r="13" fill="#22C55E"/>
+  <polyline points="48,68 53,74 65,60" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Wordmark -->
+  <text x="90" y="60" font-family="Segoe UI,Arial,sans-serif" font-size="42" font-weight="900" fill="#1E3A5F" letter-spacing="-1">Licit</text>
+  <text x="205" y="60" font-family="Segoe UI,Arial,sans-serif" font-size="42" font-weight="900" fill="#22C55E" letter-spacing="-1">App</text>
+  <!-- Tagline -->
+  <text x="90" y="82" font-family="Segoe UI,Arial,sans-serif" font-size="13" fill="#64748B" letter-spacing="3">LICITACIONES · COLOMBIA</text>
+</svg>

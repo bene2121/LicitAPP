@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(git clone *)",
+      "Skill(code-review)",
+      "PowerShell(git *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git config *)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\PC\\\\Desktop\\\\secop\\\\secop-automatizador\\\\dist\" -Recurse -File | Where-Object { $_.Length -gt 50MB } | Select-Object FullName, @{Name=\"MB\";Expression={[math]::Round\\($_.Length/1MB,1\\)}} | Sort-Object MB -Descending | Select-Object -First 20)",
+      "Bash(git rm *)",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(git checkout *)",
+      "Bash(git reset *)",
+      "Bash(git branch *)"
+    ]
+  }
+}

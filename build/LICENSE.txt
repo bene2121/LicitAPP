@@ -1,0 +1,53 @@
+LICENCIA DE USO DE SOFTWARE — LicitApp
+Versión 1.0 | Junio 2026
+
+Copyright (c) 2026 Poly Modules
+Todos los derechos reservados.
+
+TÉRMINOS Y CONDICIONES DE USO
+
+1. LICENCIA
+   El uso de este software (LicitApp) está sujeto a la adquisición de una
+   licencia válida emitida por Poly Modules. El software se licencia, no
+   se vende. Poly Modules conserva todos los derechos de propiedad
+   intelectual sobre el software.
+
+2. PLANES DE LICENCIA
+   - Básico     : $150.000 COP/mes — Explorador, Calculadora, Alertas
+   - Pro        : $350.000 COP/mes — Todo Básico + Competidores, Bot dry-run
+   - Empresa    : $800.000 COP/mes — Todo Pro + Bot real, Multi-usuario
+
+3. RESTRICCIONES
+   El titular de la licencia NO puede:
+   a) Copiar, distribuir o revender el software a terceros.
+   b) Modificar, descompilar o realizar ingeniería inversa del software.
+   c) Compartir su clave de licencia con otros usuarios o empresas.
+   d) Usar el software para actividades ilegales o contrarias a la ley
+      colombiana de contratación pública (Ley 80/93 y Ley 1150/07).
+
+4. DATOS Y PRIVACIDAD
+   LicitApp consume datos públicos del SECOP I y II (datos.gov.co).
+   Las credenciales de SECOP II del usuario nunca salen de su computador.
+   Poly Modules no almacena información privada del usuario en el servidor.
+
+5. GARANTÍA LIMITADA
+   El software se suministra "tal cual". Poly Modules no garantiza que el
+   software esté libre de errores ni que sea compatible con todos los sistemas.
+   En ningún caso Poly Modules será responsable de pérdidas económicas
+   derivadas del uso del software en procesos licitatorios.
+
+6. TERMINACIÓN
+   La licencia se termina automáticamente si el titular incumple estos términos.
+   Al terminar, el titular debe dejar de usar el software y eliminar todas
+   las copias instaladas.
+
+7. LEY APLICABLE
+   Este contrato se rige por las leyes de la República de Colombia.
+   Cualquier disputa se resolverá ante los jueces competentes de Bogotá D.C.
+
+8. CONTACTO
+   Poly Modules
+   Email: polymodulospvc@gmail.com
+   Web:   https://licitapp.co
+
+Al instalar o usar LicitApp, el usuario acepta los términos de esta licencia.

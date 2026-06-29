@@ -1,0 +1,45 @@
+# Build / distribución
+dist/
+build/*.exe
+build/*.ico
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyo
+*.egg-info/
+.eggs/
+
+# Datos y bases de datos
+data/
+*.db
+*.db-journal
+*.sqlite
+
+# Licencias y claves — NUNCA subir al repo
+licencias/claves/privada.pem
+licencias/mi_licencia.lic
+licencias/licencias_generadas/
+*.lic
+
+# Temporales y logs de licencias
+licencias/test.tmp
+licencias/*.tmp
+
+# Entorno
+.env
+.venv/
+venv/
+env/
+
+# Cache de herramientas
+.pytest_cache/
+error.txt
+
+# Capturas del bot
+data/capturas/
+
+# Superpowers (repo externo clonado)
+superpowers/

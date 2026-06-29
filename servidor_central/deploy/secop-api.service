@@ -1,0 +1,14 @@
+[Unit]
+Description=SECOP API Central
+After=network.target postgresql.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/secop-api
+Environment="PATH=/opt/secop-api/venv/bin"
+ExecStart=/opt/secop-api/venv/bin/uvicorn servidor_central.main:app --host 0.0.0.0 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,77 @@
+╔══════════════════════════════════════════════════════════════╗
+║           🏗️  LicitApp — Guía de Instalación                ║
+║              Plataforma de Licitaciones Colombia             ║
+╚══════════════════════════════════════════════════════════════╝
+
+Bienvenido a LicitApp. Sigue estos pasos para instalar y activar
+la plataforma en tu computador.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PASO 1 — Instalar la aplicación
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Ejecuta el instalador: LicitApp_Setup_v1.0.exe
+2. Sigue el asistente (Siguiente → Siguiente → Instalar)
+3. Al finalizar, se crea un ícono en tu escritorio
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PASO 2 — Activar tu licencia
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Abre LicitApp desde el escritorio
+2. En la pantalla de activación, selecciona tu archivo .lic
+   (el archivo licencia_TUNUMERO.lic que recibiste con este kit)
+3. La app verificará tu licencia y abrirá el dashboard
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PASO 3 — Configurar tu perfil
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Ve a la pestaña ⚙️ MI CUENTA
+2. Ingresa:
+   • Tu NIT y nombre de empresa
+   • Sectores UNSPSC de interés (ej: 72 = Construcción)
+   • Departamentos donde operas
+   • Rango de presupuesto habitual
+   • Email para recibir alertas
+3. Guarda el perfil → los filtros del Explorador se configuran
+   automáticamente según tu perfil
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FUNCIONES POR PESTAÑA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 EXPLORADOR     → Todos los procesos SECOP I y II con filtros
+                    completos. Haz clic en ⭐ para agregar a seguimiento.
+🧮 CALCULADORA    → Calcula tu oferta con las 5 fórmulas SECOP.
+                    Pre-carga el presupuesto del proceso seleccionado.
+📁 DOCUMENTOS     → Gestiona tus habilitantes (RUT, RUP, EF, CC).
+                    Te avisa cuando un documento está por vencer.
+🤝 CONSORCIOS     → Construye consorcios con tus aliados habituales.
+🕵️ COMPETIDORES  → Busca cualquier NIT y ve todos sus contratos.
+                    Predice qué rivales se presentarán a un proceso.
+📌 SEGUIMIENTO   → Watchlist de procesos. Alertas de cambios de estado.
+🤖 BOT SECOP II  → Automatiza la presentación de tu oferta (Plan Pro+).
+⚙️ MI CUENTA     → Perfil, licencia, configuración de alertas email.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SOPORTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Email:   polymodulospvc@gmail.com
+🌐 Web:     https://licitapp.co
+📱 WhatsApp: +57 (disponible próximamente)
+
+Tiempo de respuesta: 24 horas hábiles (lunes a viernes)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REQUISITOS DEL SISTEMA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Windows 10 / 11 (64 bits)
+• 4 GB RAM mínimo (8 GB recomendado)
+• 500 MB de espacio libre en disco
+• Conexión a Internet (para sincronizar con SECOP)
+• No requiere instalar Python ni ningún programa adicional
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Gracias por elegir LicitApp. ¡Éxitos en tus licitaciones!
+
+                                         Poly Modules
+                                         polymodulospvc@gmail.com
+                                         https://licitapp.co

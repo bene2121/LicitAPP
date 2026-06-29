@@ -1,0 +1,4 @@
+Coloca aquí el archivo icon.ico para el ejecutable de Windows.
+Puedes crear uno en: https://favicon.io/ o https://icoconvert.com/
+Tamaño recomendado: 256x256px, formato ICO multi-resolución.
+Nombre del archivo: icon.ico (en esta misma carpeta build/)

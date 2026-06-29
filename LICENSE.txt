@@ -1,0 +1,61 @@
+LICENCIA DE USO DE SOFTWARE — LicitApp
+Versión 1.0 — Junio 2026
+Copyright (c) 2026 Poly Modules. Todos los derechos reservados.
+
+========================================================================
+ARTÍCULO 1 — LICENCIA
+========================================================================
+Este software ("LicitApp") es propiedad de Poly Modules y se distribuye
+bajo licencia de uso, no de venta. Al instalar o usar este software,
+usted acepta los términos de este acuerdo.
+
+========================================================================
+ARTÍCULO 2 — PLANES Y PRECIOS
+========================================================================
+BÁSICO    $150.000 COP/mes — 1 usuario, filtros básicos, exportación CSV
+PRO       $350.000 COP/mes — 3 usuarios, bot SECOP II, alertas email
+EMPRESARIAL $800.000 COP/mes — usuarios ilimitados, API, soporte prioritario
+
+========================================================================
+ARTÍCULO 3 — RESTRICCIONES
+========================================================================
+Queda expresamente prohibido:
+  - Copiar, redistribuir o revender este software sin autorización escrita
+  - Realizar ingeniería inversa o descompilar el software
+  - Usar el software para fines ilegales o fraudulentos
+  - Compartir credenciales de licencia con terceros
+
+========================================================================
+ARTÍCULO 4 — DATOS
+========================================================================
+LicitApp consulta datos públicos de SECOP I y SECOP II disponibles en
+datos.gov.co. Poly Modules no garantiza la exactitud o completitud de
+dichos datos. El usuario es responsable de verificar la información antes
+de tomar decisiones comerciales.
+
+========================================================================
+ARTÍCULO 5 — GARANTÍA
+========================================================================
+Este software se entrega "tal cual" sin garantías expresas o implícitas.
+Poly Modules no será responsable por pérdidas económicas derivadas del
+uso del software.
+
+========================================================================
+ARTÍCULO 6 — TERMINACIÓN
+========================================================================
+Esta licencia se termina automáticamente si el usuario incumple cualquier
+término de este acuerdo. Al terminar, el usuario debe desinstalar el
+software y destruir todas las copias.
+
+========================================================================
+ARTÍCULO 7 — LEY APLICABLE
+========================================================================
+Este acuerdo se rige por las leyes de la República de Colombia. Cualquier
+disputa se resolverá ante los tribunales competentes de Bogotá D.C.
+
+========================================================================
+ARTÍCULO 8 — CONTACTO
+========================================================================
+Poly Modules
+Email: polymodulospvc@gmail.com
+Web:   https://licitapp.co

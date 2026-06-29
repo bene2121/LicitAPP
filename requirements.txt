@@ -1,0 +1,25 @@
+# Core
+requests>=2.31.0
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+openpyxl>=3.1.0
+
+# Base de datos
+sqlalchemy>=2.0.0
+
+# Dashboard
+streamlit>=1.28.0
+plotly>=5.18.0
+
+# Automatizacion web (Fase 5)
+playwright>=1.40.0
+
+# Scheduler
+apscheduler>=3.10.0
+
+# Utilidades
+python-dotenv>=1.0.0
+rich>=13.0.0
+pywebview==4.4.1
+httpx==0.27.0
