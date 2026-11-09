@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DB_PATH
 from m1_ingestor.entidades import ENTIDADES, es_entidad
 from m6_propuesta.armar import armar_propuesta
+from m7_competencia.investigar import investigar
 try:
     from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
@@ -131,6 +132,19 @@ def fmt_cop(v):
         return f"$ {float(v):,.0f}".replace(",", ".")
     except Exception:
         return "-"
+
+
+def _tabla_contratos(contratos):
+    return [{
+        "Contrato": c.get("id", ""),
+        "Titular": c.get("titular") or c.get("proveedor", ""),
+        "Entidad": c.get("entidad", ""),
+        "Objeto": (c.get("objeto") or "")[:140],
+        "Valor": fmt_cop(c.get("valor", 0)),
+        "Estado": c.get("estado", ""),
+        "Inicio": c.get("inicio", ""),
+        "Fin": c.get("fin", ""),
+    } for c in contratos]
 
 
 def dias_al_cierre(fecha_iso):
@@ -1110,6 +1124,75 @@ with tab5:
 
     with subtab_c1:
         perfil_comp = st.session_state.perfil
+        st.markdown("**Investigar por NIT, empresa o consorcio**")
+        st.caption(
+            "Cruza los contratos en ejecución de SECOP II con lo que el competidor "
+            "declaró en la oferta. Si es consorcio, también revisa a cada socio."
+        )
+        consulta_comp = st.text_input(
+            "NIT, empresa o consorcio",
+            placeholder="901727459 o CONSORCIO AMAGA 2023",
+            key="consulta_comp",
+        )
+        declarados_comp = st.text_area(
+            "Proyectos en ejecución que declararon (uno por línea)",
+            placeholder="CO1.PCCNTR.1\nMejoramiento de vías terciarias",
+            key="declarados_comp",
+            height=100,
+        )
+        if st.button("Investigar competencia", key="btn_investigar_comp") and consulta_comp.strip():
+            with st.spinner("Consultando contratos públicos..."):
+                try:
+                    hallazgo = investigar(
+                        consulta_comp.strip(),
+                        [linea for linea in declarados_comp.splitlines() if linea.strip()],
+                    )
+                except ValueError as exc_comp:
+                    hallazgo = {"error": str(exc_comp)}
+                except Exception as exc_comp:
+                    hallazgo = {"error": str(exc_comp)}
+            if hallazgo.get("error"):
+                st.error(hallazgo["error"])
+            elif not hallazgo.get("en_ejecucion") and not hallazgo.get("otros") and not hallazgo.get("socios"):
+                st.warning("No hay contratos públicos con ese NIT o ese nombre.")
+            else:
+                st.markdown(f"### {hallazgo['nombre']}")
+                if hallazgo["es_plural"]:
+                    st.markdown("**Socios del consorcio o unión temporal**")
+                    if hallazgo["socios"]:
+                        st.dataframe(
+                            [{
+                                "Socio": s["nombre"],
+                                "NIT": s["nit"],
+                                "Participación %": s["participacion"],
+                                "Líder": "Sí" if s["lider"] else "No",
+                                "Grupo": s["grupo"],
+                            } for s in hallazgo["socios"]],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.caption("El contrato figura como grupo, pero SECOP no listó los integrantes.")
+                contraste = hallazgo["contraste"]
+                if contraste["declarados"]:
+                    st.metric("En ejecución dejados por fuera", len(contraste["omitidos"]))
+                    if contraste["omitidos"]:
+                        st.error("Estos contratos están en ejecución y no aparecen en la declaración.")
+                        st.dataframe(_tabla_contratos(contraste["omitidos"]), use_container_width=True, hide_index=True)
+                    else:
+                        st.success("Los contratos en ejecución encontrados sí aparecen en la declaración.")
+                else:
+                    st.info(hallazgo["nota"])
+                st.markdown("**Contratos en ejecución**")
+                if hallazgo["en_ejecucion"]:
+                    st.dataframe(_tabla_contratos(hallazgo["en_ejecucion"]), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Ningún contrato encontrado está en ejecución.")
+                if hallazgo["otros"]:
+                    with st.expander("Otros contratos encontrados"):
+                        st.dataframe(_tabla_contratos(hallazgo["otros"]), use_container_width=True, hide_index=True)
+
+        st.markdown("---")
         st.markdown("**NITs de competidores a monitorear:**")
         nits_data = perfil_comp.get("nits_rivales") or []
         nits_init = pd.DataFrame(nits_data, columns=["NIT", "Alias"]) if nits_data else pd.DataFrame(columns=["NIT", "Alias"])
