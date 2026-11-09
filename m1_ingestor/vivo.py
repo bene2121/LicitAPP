@@ -7,27 +7,47 @@ from datetime import date, datetime, timedelta
 from m1_ingestor.campos import fila_proceso_s2, fold, soql_literal
 
 API_PROCESOS = "https://www.datos.gov.co/resource/p6dx-8zbt.json"
-LIMITE = 1000
+LIMITE = 400
 
 
 def _texto_like(texto: str) -> list[str]:
     """Variantes en mayúsculas con y sin tildes (SECOP guarda los objetos con tildes)."""
     crudo = soql_literal(str(texto).upper()).replace("%", "").replace("_", " ")
     plano = soql_literal(fold(texto).upper()).replace("%", "").replace("_", " ")
-    return sorted({crudo, plano})
+    # Comodín de un carácter en cada vocal: 'ATL_NT_C_' encuentra 'ATLÁNTICO' y 'ATLANTICO'.
+    sin_tilde = re.sub(r"[AEIOU]", "_", plano)
+    return sorted({crudo, plano, sin_tilde})
 
 
 def where_vivo(filtros: dict, hoy: date | None = None) -> str:
     hoy = hoy or date.today()
+    # Solo procesos que todavía reciben ofertas (fecha de cierre hoy o después).
     partes = [
-        f"(fecha_de_recepcion_de >= '{hoy.isoformat()}T00:00:00' "
-        "OR fase = 'Presentación de oferta' OR fase = 'Manifestación de interés (Menor Cuantía)')",
+        f"fecha_de_recepcion_de >= '{hoy.isoformat()}T00:00:00'",
         "estado_del_procedimiento != 'Cancelado'",
     ]
+    deptos = [d for d in (filtros.get("departamentos") or []) if d]
+    if deptos:
+        opciones = []
+        for d in deptos[:10]:
+            for v in _texto_like(d):
+                opciones.append(f"upper(departamento_entidad) like '%{v}%'")
+        partes.append("(" + " OR ".join(opciones) + ")")
+    modalidades = [m for m in (filtros.get("modalidades") or []) if m]
+    if modalidades:
+        opciones = []
+        for m in modalidades[:10]:
+            for v in _texto_like(m):
+                opciones.append(f"upper(modalidad_de_contratacion) like '%{v}%'")
+        partes.append("(" + " OR ".join(opciones) + ")")
+    unspsc = [str(u) for u in (filtros.get("unspsc") or []) if u]
+    if unspsc:
+        partes.append("(" + " OR ".join(
+            f"codigo_principal_de_categoria like 'V1.{soql_literal(u)}%'" for u in unspsc[:10]) + ")")
     dias_max = int(filtros.get("dias_cierre_max") or 0)
     if dias_max:
         tope = (hoy + timedelta(days=dias_max)).isoformat()
-        partes.append(f"(fecha_de_recepcion_de IS NULL OR fecha_de_recepcion_de <= '{tope}T23:59:59')")
+        partes.append(f"fecha_de_recepcion_de <= '{tope}T23:59:59'")
     po_min, po_max = float(filtros.get("po_min") or 0), float(filtros.get("po_max") or 0)
     if po_min > 0:
         partes.append(f"precio_base >= {int(po_min)}")

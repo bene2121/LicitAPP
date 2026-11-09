@@ -84,6 +84,8 @@ def test_flujo_completo_en_la_app(tmp_path):
         btn("asis_guardar_datos").click().run(); assert not at.exception, at.exception
         txt("asis_buscar").input("SVCMIN0010-25"); btn("asis_btn_buscar").click().run()
         btn("asis_elegir_0").click().run(); assert not at.exception, at.exception
+        btn("eval_calcular").click().run(); assert not at.exception, at.exception
+        btn("eval_continuar").click().run(); assert not at.exception, at.exception
         assert any("4 ofertas" in i.value or "5 ofertas" in i.value for i in at.info), [i.value for i in at.info]
         btn("asis_s2").click().run(); assert not at.exception, at.exception
         assert at.session_state.oferta_guardada["precio"] > 0
@@ -133,3 +135,53 @@ def test_explorador_en_vivo_y_guardar(tmp_path):
     env = dict(os.environ, LICITAPP_DATA_DIR=str(tmp_path / "data"), LICITAPP_EXPEDIENTES=str(tmp_path / "exp"))
     salida = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=600)
     assert "VIVO_OK" in salida.stdout, salida.stdout[-2000:] + salida.stderr[-3000:]
+
+
+def test_where_vivo_filtra_departamento_modalidad_y_sector_en_secop():
+    from datetime import date
+    from m1_ingestor.vivo import where_vivo
+    w = where_vivo({"departamentos": ["ATLANTICO"], "modalidades": ["Mínima Cuantía"], "unspsc": ["72"]}, date(2026, 11, 9))
+    assert "upper(departamento_entidad) like '%_TL_NT_C_%'" in w
+    assert "upper(modalidad_de_contratacion) like" in w and "codigo_principal_de_categoria like 'V1.72%'" in w
+    assert "fecha_de_recepcion_de >= '2026-11-09" in w and "fase =" not in w
+
+
+def test_checklist_por_oferta_exige_evidencia_y_revision(tmp_path):
+    from m6_propuesta import asistente as A
+    perfil = {"empresa": "ALFA SAS", "proponente_nombre": "ALFA SAS", "nit": "900123456",
+              "representante": "ANA", "proponente_plural": False}
+    proceso = {"id": "CO1.REQ.1", "referencia": "LP-001", "entidad": "ENTIDAD", "objeto": "OBRA"}
+    carpeta = A.crear_expediente(perfil, proceso, {"precio": 1000}, base=tmp_path)
+    confirmaciones = {"global_pliego": True}
+    A.guardar_checklist(carpeta, confirmaciones)
+    assert A.cargar_checklist(carpeta)["global_pliego"] is True
+    estado = A.estado_checklist(carpeta, False, confirmaciones)
+    assert estado["porcentaje"] < 100 and not estado["listo"]
+    carta = next(i for i in estado["secciones"] if i["clave"] == "carta")
+    assert not carta["evidencia"]  # el Word generado todavía no está firmado en PDF
+
+    for clave, nombre, _ in A.SECCIONES:
+        if clave in {"consorcio", "otros"}:
+            continue
+        (carpeta / nombre / f"{clave}.pdf").write_bytes(b"%PDF")
+        confirmaciones[f"seccion_{clave}"] = True
+    for clave in ("pliego", "adendas", "requisitos", "cierre", "canal"):
+        confirmaciones[f"global_{clave}"] = True
+    estado = A.estado_checklist(carpeta, False, confirmaciones)
+    assert estado["listo"] and estado["porcentaje"] == 100
+
+
+def test_evaluacion_experiencia_financiera_y_juridica():
+    from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total
+    contratos = [
+        {"contrato": "RUP-1", "valor": 800, "participacion": 100, "terminado": True, "soporte": True, "actividad": True},
+        {"contrato": "RUP-2", "valor": 400, "participacion": 50, "terminado": True, "soporte": True, "actividad": False},
+    ]
+    exp = evaluar_experiencia({"pct_total": 100, "pct_especifica": 70, "max_contratos": 2}, contratos, 1000)
+    assert exp["cumple"] and exp["total"] == 1000 and exp["especifico"] == 800
+    fin = evaluar_financiero({"liquidez": 1.5, "liquidez_min": 1.2,
+                              "endeudamiento": 0.5, "endeudamiento_max": 0.7,
+                              "aplica_cobertura": False, "aplica_roe": False, "aplica_roa": False})
+    jur = {k: True for k in ("capacidad_juridica", "rup_vigente", "sin_inhabilidades", "seguridad_social", "garantia")}
+    total = evaluar_total(exp, fin, jur)
+    assert total["cumple"] and total["porcentaje"] == 100

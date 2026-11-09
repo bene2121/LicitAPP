@@ -7,6 +7,7 @@ y guarda los documentos que el usuario sube. No inventa datos ni radica.
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import date
 from pathlib import Path
@@ -19,6 +20,7 @@ API_PROCESOS = "https://www.datos.gov.co/resource/p6dx-8zbt.json"
 API_OFERTAS = "https://www.datos.gov.co/resource/wi7w-2nvm.json"
 MAX_SUBIDA = 50 * 1024 * 1024
 EXTENSIONES = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".zip", ".rar"}
+ARCHIVO_CHECKLIST = ".licitapp_checklist.json"
 
 # Orden estándar de una propuesta pública (pliegos tipo de Colombia Compra Eficiente).
 SECCIONES = [
@@ -126,11 +128,61 @@ def faltantes(carpeta: Path, plural: bool) -> list[str]:
         if clave == "consorcio" and not plural or clave == "otros":
             continue
         archivos = [p for p in (carpeta / nombre).glob("*") if p.is_file()]
-        if clave == "carta":
+        if clave in {"carta", "consorcio"}:
             archivos = [p for p in archivos if p.suffix.lower() == ".pdf"]
         if not archivos:
             pendientes.append(f"{nombre}: {ayuda}")
     return pendientes
+
+
+def cargar_checklist(carpeta: Path) -> dict:
+    """Carga las confirmaciones del usuario para una oferta concreta."""
+    ruta = carpeta / ARCHIVO_CHECKLIST
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        return datos if isinstance(datos, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def guardar_checklist(carpeta: Path, datos: dict) -> None:
+    """Persiste el avance sin confundirlo con un documento de la propuesta."""
+    ruta = carpeta / ARCHIVO_CHECKLIST
+    temporal = ruta.with_suffix(".tmp")
+    temporal.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporal.replace(ruta)
+
+
+def estado_checklist(carpeta: Path, plural: bool, confirmaciones: dict | None = None) -> dict:
+    """Estado verificable: evidencia cargada + revisión expresa contra el pliego."""
+    confirmaciones = confirmaciones or {}
+    items = []
+    for clave, nombre, ayuda in SECCIONES:
+        if clave == "otros" or (clave == "consorcio" and not plural):
+            continue
+        archivos = [p for p in (carpeta / nombre).glob("*") if p.is_file()]
+        if clave in {"carta", "consorcio"}:
+            archivos = [p for p in archivos if p.suffix.lower() == ".pdf"]
+        evidencia = bool(archivos)
+        revisado = bool(confirmaciones.get(f"seccion_{clave}"))
+        items.append({"clave": clave, "nombre": nombre, "ayuda": ayuda,
+                      "evidencia": evidencia, "revisado": revisado,
+                      "completo": evidencia and revisado})
+    globales = [
+        ("pliego", "Descargué y revisé el pliego, anexos y formatos oficiales"),
+        ("adendas", "Revisé todas las adendas publicadas"),
+        ("requisitos", "Verifiqué requisitos habilitantes y factores de evaluación"),
+        ("cierre", "Confirmé fecha y hora exactas de cierre"),
+        ("canal", "Confirmé el canal de presentación y el acceso a la plataforma"),
+    ]
+    controles = [{"clave": clave, "nombre": texto,
+                  "completo": bool(confirmaciones.get(f"global_{clave}"))}
+                 for clave, texto in globales]
+    total = len(items) + len(controles)
+    completos = sum(i["completo"] for i in items) + sum(i["completo"] for i in controles)
+    return {"secciones": items, "controles": controles, "completos": completos, "total": total,
+            "porcentaje": round(completos / total * 100) if total else 100,
+            "listo": completos == total}
 
 
 def _cop(valor) -> str:

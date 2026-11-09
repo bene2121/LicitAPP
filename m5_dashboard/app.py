@@ -268,7 +268,8 @@ def _secop_vivo(filtros: tuple):
     from m1_ingestor.vivo import buscar_en_vivo
     from m7_competencia.investigar import _cliente_publico
     cliente = st.session_state.get("_cliente_secop_pruebas") or _cliente_publico
-    return buscar_en_vivo(dict(filtros), cliente), datetime.now().strftime("%H:%M")
+    datos = {k: (list(v) if isinstance(v, tuple) else v) for k, v in filtros}
+    return buscar_en_vivo(datos, cliente), datetime.now().strftime("%H:%M")
 
 
 def guardar_perfil(perfil):
@@ -456,9 +457,13 @@ with tab1:
             filtros_api.pop("entidad", None)
         try:
             with st.spinner("Consultando SECOP II en vivo…"):
-                procesos_todos, _hora = _secop_vivo(tuple(sorted(
-                    (k, v) for k, v in filtros_api.items()
-                    if k in ("q", "entidad", "nit_entidad", "po_min", "po_max", "dias_cierre_max"))))
+                _clave = {k: v for k, v in filtros_api.items()
+                          if k in ("q", "entidad", "nit_entidad", "po_min", "po_max", "dias_cierre_max")}
+                if not fuente_especial:
+                    _clave["departamentos"] = tuple(deptos_sel)
+                    _clave["unspsc"] = tuple(unspsc_codes)
+                _clave["modalidades"] = tuple(modal_sel)
+                procesos_todos, _hora = _secop_vivo(tuple(sorted(_clave.items())))
             origen = "vivo"
             _b2.caption(f"Datos en vivo de SECOP II · consultado {_hora}")
         except Exception as _exc_vivo:
@@ -1320,6 +1325,9 @@ with tab8:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab5:
     st.subheader("🕵️ Inteligencia Competitiva")
+    st.info("Aquí puedes saber con quién compites y qué contratos tiene en ejecución. "
+            "La información proviene de datos públicos de SECOP: úsala para evaluar capacidad y riesgos, "
+            "no para coordinar precios ni acuerdos con otros oferentes.")
 
     subtab_c1, subtab_c2 = st.tabs(["👤 Rastreo de Rivales", "🏛️ Análisis de Entidades"])
 
@@ -1330,6 +1338,15 @@ with tab5:
             "Cruza los contratos en ejecución de SECOP II con lo que el competidor "
             "declaró en la oferta. Si es consorcio, también revisa a cada socio."
         )
+        with st.expander("¿Cómo usar esta investigación?"):
+            st.markdown("""
+1. Busca primero por **NIT**; es más preciso que el nombre.
+2. Si compite como consorcio o unión temporal, busca también el nombre del grupo.
+3. Revisa contratos en ejecución, participación en otros consorcios y experiencia reciente.
+4. Si tienes la declaración de contratos del rival, pega sus referencias para detectar posibles omisiones.
+
+Un resultado vacío no prueba que la empresa no tenga contratos: puede haber diferencias de nombre, NIT o actualización en SECOP.
+""")
         consulta_comp = st.text_input(
             "NIT, empresa o consorcio",
             placeholder="901727459 o CONSORCIO AMAGA 2023",

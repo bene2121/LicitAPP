@@ -9,6 +9,7 @@ proceso nuevo y marca lo que el proponente debe rehacer o firmar.
 from __future__ import annotations
 
 import csv
+import os
 import re
 import shutil
 import sys
@@ -495,7 +496,13 @@ def generar_paquete(
 
     indice = []
     for seccion in expediente["secciones"]:
-        carpeta = salida / seccion["carpeta"]
+        # Windows todavía limita muchas operaciones de Office/zip a rutas de 260
+        # caracteres. Conservamos el número y el sentido de la sección, pero
+        # acortamos únicamente nombres excepcionalmente largos en el paquete.
+        nombre_seccion = seccion["carpeta"]
+        if len(nombre_seccion) > 55:
+            nombre_seccion = nombre_seccion[:55].rstrip(" .-_")
+        carpeta = salida / nombre_seccion
         carpeta.mkdir(parents=True, exist_ok=True)
         hay_formato = any(a["clase"] == "formato" for a in seccion["archivos"])
         for archivo in seccion["archivos"]:
@@ -538,13 +545,19 @@ def generar_paquete(
 def _procesar_archivo(seccion, archivo, carpeta, reemplazos, mismo_proceso, hay_formato, cierre) -> dict:
     origen = Path(archivo["ruta"])
     destino = carpeta / archivo["relativa"]
+    if os.name == "nt" and len(str(destino)) > 235:
+        # python-docx crea además un archivo temporal ".tmp.docx". Dejamos
+        # margen suficiente sin cambiar la extensión ni perder legibilidad.
+        exceso = len(str(destino)) - 235
+        nuevo_largo = max(20, len(destino.stem) - exceso)
+        destino = destino.with_name(destino.stem[:nuevo_largo].rstrip(" .-_") + destino.suffix)
     if not ruta_dentro_de(carpeta, destino) or origen.is_symlink():
         raise ValueError(f"Ruta no permitida en el expediente: {archivo['relativa']}")
     destino.parent.mkdir(parents=True, exist_ok=True)
     fila = {
         "orden": seccion["numero"],
         "seccion": seccion["carpeta"],
-        "archivo": archivo["relativa"],
+        "archivo": str(destino.relative_to(carpeta)),
         "estado": "listo",
         "accion": "Copiado del expediente",
         "observacion": "",
