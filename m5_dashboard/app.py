@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
 from m1_ingestor.entidades import ENTIDADES, es_entidad
+from m6_propuesta.armar import armar_propuesta
 try:
     from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
@@ -266,7 +267,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🤝 CONSORCIOS",
     "🕵️ COMPETIDORES",
     "📌 SEGUIMIENTO",
-    "🤖 BOT SECOP II",
+    "📄 PROPUESTA",
     "⚙️ MI CUENTA",
 ])
 
@@ -505,8 +506,7 @@ with tab1:
                         break
                 st.info(
                     f"✅ Proceso seleccionado: **{row['Objeto']}**. "
-                    "Ve a la tab **🧮 CALCULADORA** para calcular tu oferta, "
-                    "o a **📌 SEGUIMIENTO** para monitorearlo."
+                    "Calcula el precio en **🧮 CALCULADORA** y ármala en **📄 PROPUESTA**."
                 )
 
             st.markdown("<hr style='margin:2px 0 6px 0; opacity:0.2'>", unsafe_allow_html=True)
@@ -663,7 +663,10 @@ with tab2:
                             "presupuesto_oficial": po_calc,
                             "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
                             "fecha": datetime.now().isoformat(),
-                            "proceso": proc_sel.get("id", "") if proc_sel else "",
+                            "proceso": (
+                                (proc_sel.get("id") or proc_sel.get("id_del_proceso", ""))
+                                if proc_sel else ""
+                            ),
                         }
                         st.session_state.oferta_guardada = oferta_info
                         # Guardar en historial del perfil
@@ -1334,7 +1337,80 @@ with tab6:
 # TAB 7 — BOT SECOP II
 # ─────────────────────────────────────────────────────────────────────────────
 with tab7:
-    st.subheader("🤖 Bot de Presentación Automática — SECOP II")
+    st.subheader("Armar la propuesta para presentarla")
+    st.caption(
+        "LicitApp reúne el proceso, el precio y los habilitantes. "
+        "La radicación la haces tú en el canal de la entidad."
+    )
+    _proc_prop = st.session_state.get("proceso_seleccionado")
+    _oferta_prop = st.session_state.get("oferta_guardada")
+    _perfil_prop = st.session_state.perfil
+    if not _proc_prop:
+        st.warning("En el Explorador pulsa **Preparar oferta** sobre un proceso real.")
+    elif not _oferta_prop or not _oferta_prop.get("precio"):
+        st.warning("En la Calculadora pulsa **Usar esta oferta** con un precio calculado.")
+    else:
+        try:
+            _paquete = armar_propuesta(_proc_prop, _perfil_prop, _oferta_prop)
+        except ValueError as _exc_prop:
+            st.error(str(_exc_prop))
+            _paquete = None
+        if _paquete:
+            _c1, _c2, _c3 = st.columns(3)
+            _c1.metric("Proceso", _paquete["proceso"]["id"])
+            _c2.metric("Oferta", f"$ {_paquete['economica']['precio']:,.0f}".replace(",", "."))
+            _c3.metric("Canal", _paquete["canal"]["tipo"])
+            st.info(_paquete["canal"]["instruccion"])
+            st.dataframe(
+                [{"Documento": h["nombre"], "Estado": h["estado"], "Listo": "Sí" if h["listo"] else "No"}
+                 for h in _paquete["habilitantes"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+            if _paquete["lista_para_presentar"]:
+                st.success("La propuesta está completa para revisarla y presentarla.")
+            else:
+                st.warning("Falta: " + ", ".join(_paquete["faltantes"]))
+            st.text_area("Carta de oferta", _paquete["carta"], height=260)
+            _nombre_archivo = f"propuesta_{_paquete['proceso']['id']}.txt"
+            st.download_button(
+                "Descargar carta de oferta",
+                data=_paquete["carta"].encode("utf-8"),
+                file_name=_nombre_archivo,
+                mime="text/plain",
+                key="btn_descarga_propuesta",
+            )
+            if _paquete["correo"]:
+                _correo_txt = (
+                    f"Para: {_paquete['correo']['para']}\n"
+                    f"Asunto: {_paquete['correo']['asunto']}\n\n"
+                    f"{_paquete['correo']['cuerpo']}"
+                )
+                st.download_button(
+                    "Descargar correo para Findeter",
+                    data=_correo_txt.encode("utf-8"),
+                    file_name=f"correo_{_paquete['proceso']['id']}.txt",
+                    mime="text/plain",
+                    key="btn_descarga_correo",
+                )
+            if st.button("Guardar propuesta en mi cuenta", key="btn_guardar_propuesta"):
+                _perfil_prop.setdefault("propuestas", []).append({
+                    "fecha": _paquete["fecha"],
+                    "proceso": _paquete["proceso"]["id"],
+                    "precio": _paquete["economica"]["precio"],
+                    "canal": _paquete["canal"]["tipo"],
+                    "lista": _paquete["lista_para_presentar"],
+                })
+                guardar_perfil(_perfil_prop)
+                st.session_state.perfil = _perfil_prop
+                st.success("Propuesta guardada en el perfil.")
+
+    st.markdown("---")
+    st.subheader("Bot de SECOP II, opcional")
+    st.caption(
+        "Solo intenta el formulario de SECOP II y, en ensayo, no envía la oferta. "
+        "Ecopetrol se presenta en Ariba y Findeter por correo."
+    )
 
     # ── Advertencia legal ──────────────────────────────────────────────────────
     st.warning(
@@ -1349,7 +1425,7 @@ with tab7:
     perfil6 = st.session_state.perfil
 
     # ── Credenciales SECOP II ──────────────────────────────────────────────────
-    with st.expander("🔐 Credenciales SECOP II", expanded=True):
+    with st.expander("🔐 Credenciales SECOP II", expanded=False):
         cred_c1, cred_c2 = st.columns(2)
         usuario_bot   = cred_c1.text_input("Usuario SECOP II", value=perfil6.get("secop2_usuario", ""), key="bot_usuario")
         contrasena_bot = cred_c2.text_input("Contraseña SECOP II", value="", type="password", key="bot_pass")
@@ -1360,7 +1436,7 @@ with tab7:
         )
 
     # ── Seleccionar proceso ────────────────────────────────────────────────────
-    with st.expander("🎯 Proceso objetivo", expanded=True):
+    with st.expander("🎯 Proceso objetivo", expanded=False):
         procesos_bot, _origen_bot = cargar_procesos()
 
         # Si viene de Tab 1
