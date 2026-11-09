@@ -44,6 +44,10 @@ CACHE_PATH    = os.path.join(_data_dir(), ".lic_cache")
 SERVIDOR_URL = os.getenv("SECOP_LICENSE_SERVER", "https://tu-servidor.com/api/validar")
 GRACIA_OFFLINE_DIAS = 3   # días sin internet antes de bloquear
 
+def _servidor_configurado() -> bool:
+    """El valor de fabrica no es un servidor real."""
+    return "tu-servidor.com" not in SERVIDOR_URL.lower()
+
 def _machine_id() -> str:
     """Huella del equipo (MAC + hostname)."""
     import uuid, socket
@@ -131,6 +135,17 @@ def validar_licencia(ruta_licencia: str = None) -> dict:
             "📧 polymodulospvc@gmail.com"
         )
 
+    info_local = {
+        "license_id":       payload["license_id"],
+        "nit":              payload["nit"],
+        "nombre":           payload["nombre"],
+        "plan":             payload["plan"],
+        "fecha_vencimiento": payload["fecha_vencimiento"],
+        "dias_restantes":   max(0, (datetime.strptime(payload["fecha_vencimiento"], "%Y-%m-%d") - datetime.now()).days),
+    }
+    if not _servidor_configurado():
+        return info_local
+
     # 4. Verificar con servidor (cada 24h)
     cache = _leer_cache()
     ultimo_check = cache.get("ultimo_check", "2000-01-01T00:00:00")
@@ -178,13 +193,27 @@ def validar_licencia(ruta_licencia: str = None) -> dict:
                     "por primera vez. Conéctate a internet y vuelve a abrir la app."
                 )
 
+    return info_local
+
+
+def resolver_acceso(ruta_licencia: str = None) -> dict:
+    """Licencia firmada si existe. Si no hay archivo, abre el trial de 7 dias."""
+    ruta = ruta_licencia or LICENCIA_PATH
+    if os.path.exists(ruta):
+        info = validar_licencia(ruta)
+        info["es_trial"] = False
+        return info
+    from licencias.trial import activar_o_verificar_trial
+    trial = activar_o_verificar_trial()
+    dias = int(trial["dias_restantes"])
     return {
-        "license_id":       payload["license_id"],
-        "nit":              payload["nit"],
-        "nombre":           payload["nombre"],
-        "plan":             payload["plan"],
-        "fecha_vencimiento": payload["fecha_vencimiento"],
-        "dias_restantes":   max(0, (datetime.strptime(payload["fecha_vencimiento"], "%Y-%m-%d") - datetime.now()).days),
+        "license_id": "trial",
+        "nit": "",
+        "nombre": "Prueba",
+        "plan": "trial",
+        "fecha_vencimiento": (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d"),
+        "dias_restantes": dias,
+        "es_trial": True,
     }
 
 if __name__ == "__main__":

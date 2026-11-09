@@ -1,7 +1,11 @@
 """Motor de filtrado y priorización de procesos SECOP — obras civiles."""
-import os, sys, sqlite3
-from datetime import datetime, timedelta
+import os, sys, sqlite3, unicodedata
+from datetime import datetime
 import pandas as pd
+
+def _fold(texto) -> str:
+    base = unicodedata.normalize("NFD", str(texto or ""))
+    return "".join(c for c in base if unicodedata.category(c) != "Mn")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import PRESUPUESTO_MIN, PRESUPUESTO_MAX, UNSPSC_INTERES
@@ -64,10 +68,10 @@ def score_proceso(proceso: dict, config: dict = None) -> float:
     score += s_dias * 20
 
     # 2. Modalidad (20%)
-    modalidad = str(proceso.get("modalidad") or "").lower().strip()
+    modalidad = _fold(proceso.get("modalidad")).lower()
     s_mod = 0.3
     for key, val in SCORE_MODALIDAD.items():
-        if key in modalidad:
+        if _fold(key).lower() in modalidad:
             s_mod = val
             break
     score += s_mod * 20
@@ -86,22 +90,22 @@ def score_proceso(proceso: dict, config: dict = None) -> float:
     score += s_po * 20
 
     # 4. UNSPSC match (25%)
-    unspsc = str(proceso.get("unspsc") or proceso.get("segmento") or "")
+    unspsc = "".join(c for c in str(proceso.get("unspsc") or proceso.get("segmento") or "") if c.isdigit())
     s_unspsc = 0.0
     for u in unspsc_interes:
-        prefix = str(u)[:2]  # primeros 2 dígitos del código UNSPSC
-        if unspsc.startswith(prefix):
+        prefix = "".join(c for c in str(u) if c.isdigit())[:2]
+        if prefix and unspsc.startswith(prefix):
             s_unspsc = 1.0
             break
     score += s_unspsc * 25
 
     # 5. Estado favorable (15%)
-    estado = str(proceso.get("estado") or proceso.get("fase") or "").upper()
-    if "CONVOCADO" in estado:
+    estado = _fold(proceso.get("estado") or proceso.get("fase")).upper()
+    if any(marca in estado for marca in ("CONVOCADO", "PRESENTACION DE OFERTA", "FASE DE OFERTAS", "FASE DE SELECCION")):
         s_estado = 1.0
-    elif "INVITACION" in estado or "INVITACIÓN" in estado:
-        s_estado = 0.9
-    elif "EXPRESION" in estado or "INTERÉS" in estado or "INTERES" in estado:
+    elif "OBSERVACION" in estado:
+        s_estado = 0.8
+    elif any(marca in estado for marca in ("INVITACION", "MANIFESTACION", "EXPRESION", "INTERES")):
         s_estado = 0.7
     elif "BORRADOR" in estado:
         s_estado = 0.3

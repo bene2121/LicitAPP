@@ -16,24 +16,25 @@ async def verificar_licencia(x_license_key: str = Header(default="")):
     try:
         import sqlite3
         db_path = os.getenv("SECOP_ADMIN_DB", os.path.join(os.path.expanduser("~"), "secop_clientes.db"))
-        if os.path.exists(db_path):
-            conn = sqlite3.connect(db_path)
-            row = conn.execute(
-                "SELECT activo, fecha_vencimiento FROM clientes WHERE license_id=?",
-                (x_license_key,)
-            ).fetchone()
-            conn.close()
-            if not row:
-                raise HTTPException(status_code=403, detail="Licencia no encontrada")
-            activo, fecha_vence = row
-            from datetime import datetime
-            if not activo or fecha_vence < datetime.now().strftime("%Y-%m-%d"):
-                raise HTTPException(status_code=403, detail="Licencia inactiva o vencida")
+        if not os.path.exists(db_path):
+            raise HTTPException(status_code=503, detail="Servidor de licencias no disponible")
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT activo, fecha_vencimiento FROM clientes WHERE license_id=?",
+            (x_license_key,)
+        ).fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=403, detail="Licencia no encontrada")
+        activo, fecha_vence = row
+        from datetime import datetime
+        if not activo or fecha_vence < datetime.now().strftime("%Y-%m-%d"):
+            raise HTTPException(status_code=403, detail="Licencia inactiva o vencida")
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         # DB no disponible o error inesperado — denegar acceso por defecto (fail-closed)
-        raise HTTPException(status_code=503, detail=f"Error verificando licencia: {e}")
+        raise HTTPException(status_code=503, detail="No se pudo verificar la licencia")
 
 try:
     from .db import engine, Base
