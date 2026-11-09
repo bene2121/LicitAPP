@@ -139,7 +139,11 @@ def fila_proceso_s2(registro: dict, fecha_descarga: str, canal_oferta: str = "")
             registro.get("estado_del_procedimiento"),
         ),
         "presupuesto_oficial": precio,
-        "fecha_cierre": "",
+        # Fecha límite para recibir ofertas (en SECOP II se llama fecha_de_recepcion_de).
+        "fecha_cierre": _texto(
+            registro.get("fecha_de_recepcion_de"),
+            registro.get("fecha_de_recepcion_de_ofertas"),
+        )[:10],
         "unspsc": unspsc_codigo(registro.get("codigo_principal_de_categoria")),
         "departamento_entidad": norm_departamento(registro.get("departamento_entidad")),
         "ciudad_unidad": _texto(

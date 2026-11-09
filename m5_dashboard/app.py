@@ -57,7 +57,7 @@ except Exception:
     _HAS_FILTER = False
 
 st.set_page_config(
-    page_title="SECOP Automatizador",
+    page_title="LicitApp",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -283,7 +283,7 @@ if "tab_activo" not in st.session_state:
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(
-    "<h1 style='margin-bottom:0; color:#1F4E79;'>🏗️ SECOP Automatizador <span style='font-size:1rem;font-weight:400;'>— Obras Civiles</span></h1>",
+    "<h1 style='margin-bottom:0; color:#1F4E79;'>🏗️ LicitApp <span style='font-size:1rem;font-weight:400;'>— Obras Civiles</span></h1>",
     unsafe_allow_html=True,
 )
 
@@ -307,7 +307,8 @@ st.markdown("---")
 # ═══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "🚀 OFERTAR PASO A PASO",
     "🔍 EXPLORADOR",
     "🧮 CALCULADORA DE OFERTAS",
     "📁 MIS DOCUMENTOS",
@@ -317,6 +318,16 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📄 PROPUESTA",
     "⚙️ MI CUENTA",
 ])
+
+with tab0:
+    from m5_dashboard.asistente_ui import render as _render_asistente
+    from m7_competencia.investigar import _cliente_publico as _cliente_secop
+    _render_asistente(
+        st.session_state.perfil, guardar_perfil,
+        st.session_state.get("_cliente_secop_pruebas") or _cliente_secop,  # pruebas inyectan un cliente falso
+        optimizar_todas if _HAS_ENGINE else None,
+        diferencias_formulas if _HAS_ENGINE else None,
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 1 — EXPLORADOR

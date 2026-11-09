@@ -82,7 +82,7 @@ hiddenimports += [
     "config", "api_client", "seguridad",
     # Solo lo necesario de licencias (sin generadores ni servidor):
     "licencias", "licencias.validador", "licencias.trial",
-    "m5_dashboard",
+    "m5_dashboard", "m5_dashboard.asistente_ui",
     "dotenv", "playwright", "playwright.sync_api",
 ]
 
