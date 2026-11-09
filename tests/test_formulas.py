@@ -165,8 +165,13 @@ def test_calcular_todos_promedio_coherente(engine):
 # Tests optimizador
 # ---------------------------------------------------------------------------
 
+def test_optimizador_sin_ofertas_reales():
+    with pytest.raises(ValueError):
+        optimizar_oferta(1_000_000, 100, [])
+
+
 def test_optimizador_retorna_precio_valido():
-    resultado = optimizar_oferta(1_000_000, 100, [])
+    resultado = optimizar_oferta(1_000_000, 100, [850_000, 820_000, 880_000])
     assert 500_000 <= resultado["oferta_optima"] <= 999_000
 
 
@@ -177,15 +182,39 @@ def test_optimizador_retorna_estructura_completa():
 
 
 def test_optimizador_scores_no_negativos():
-    resultado = optimizar_oferta(1_000_000, 100, [])
+    resultado = optimizar_oferta(1_000_000, 100, [850_000, 820_000, 880_000])
     for k, v in resultado["scores"].items():
         assert v >= 0.0, f"Score {k} es negativo: {v}"
 
 
+def test_optimizador_no_inventa_rivales():
+    ofertas = [850_000, 820_000, 880_000, 790_000]
+    a = optimizar_oferta(1_000_000, 100, ofertas, n_rivales_estimados=2)
+    b = optimizar_oferta(1_000_000, 100, ofertas, n_rivales_estimados=15)
+    assert a["oferta_optima"] == b["oferta_optima"]
+    for cod in a["scores"]:
+        assert a["scores"][cod] == pytest.approx(b["scores"][cod])
+
+
+def test_optimizador_coincide_con_motor():
+    ofertas = [900_000.0, 850_000.0, 800_000.0]
+    resultado = optimizar_oferta(1_000_000, 100, ofertas)
+    engine = FormulaEngine()
+    tabla = resultado["tabla_simulacion"]
+    indices = np.linspace(0, len(tabla) - 1, 5).astype(int)
+    for i in indices:
+        precio = float(tabla.iloc[i]["precio"])
+        pool = ofertas + [precio]
+        assert tabla.iloc[i]["M"] == pytest.approx(engine.score_M(precio, pool, 100), rel=1e-6, abs=1e-6)
+        assert tabla.iloc[i]["MG"] == pytest.approx(engine.score_MG(precio, pool, 100), rel=1e-6, abs=1e-6)
+        assert tabla.iloc[i]["MAB"] == pytest.approx(engine.score_MAB(precio, pool, 100), rel=1e-6, abs=1e-6)
+        assert tabla.iloc[i]["MAA"] == pytest.approx(engine.score_MAA(precio, pool, 100), rel=1e-6, abs=1e-6)
+        assert tabla.iloc[i]["MV"] == pytest.approx(engine.score_MV(precio, pool, 100), rel=1e-6, abs=1e-6)
+
+
 def test_optimizador_formula_conocida():
     """Con formula_conocida, el score_esperado debe coincidir con ese score."""
-    resultado = optimizar_oferta(1_000_000, 100, [], formula_conocida="MV")
-    oferta = resultado["oferta_optima"]
+    resultado = optimizar_oferta(1_000_000, 100, [850_000, 820_000, 880_000], formula_conocida="MV")
     assert resultado["score_esperado"] == pytest.approx(resultado["scores"]["MV"], rel=1e-6)
 
 
@@ -202,7 +231,7 @@ def test_optimizador_con_historico():
 
 def test_optimizador_tabla_simulacion_tiene_columnas():
     import pandas as pd
-    resultado = optimizar_oferta(500_000, 50, [])
+    resultado = optimizar_oferta(500_000, 50, [420_000, 400_000, 450_000])
     tabla = resultado["tabla_simulacion"]
     assert isinstance(tabla, pd.DataFrame)
     for col in ["precio", "M", "MG", "MAB", "MAA", "MV", "score_esperado"]:

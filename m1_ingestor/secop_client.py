@@ -22,6 +22,10 @@ RETRY_COUNT = 3
 RETRY_BACKOFF = 2.0  # segundos base para backoff exponencial
 
 
+class SecopRequestError(Exception):
+    """La API no respondio despues de los reintentos."""
+
+
 class SecopClient:
     """Cliente para las APIs Socrata de SECOP I y SECOP II en datos.gov.co."""
 
@@ -93,7 +97,7 @@ class SecopClient:
                         RETRY_COUNT,
                         exc,
                     )
-                    return []
+                    raise SecopRequestError(str(exc)) from exc
                 wait = RETRY_BACKOFF * (2 ** (attempt - 1))
                 logger.warning(
                     "[secop_client] Reintento %d/%d en %.1fs — %s",

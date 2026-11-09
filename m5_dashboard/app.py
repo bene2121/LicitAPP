@@ -1,6 +1,6 @@
 """Dashboard SECOP Automatizador — Obras Civiles (v2 multipage)."""
 import os, sys, json, sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import streamlit as st
 import pandas as pd
@@ -36,9 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
 try:
-    from m2_formulas.formula_engine import FormulaEngine
-    from m2_formulas.optimizador import optimizar_oferta
-    _engine = FormulaEngine()
+    from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
 except Exception:
     _HAS_ENGINE = False
@@ -78,27 +76,6 @@ st.markdown("""
 .tag-exp   { background:#fff3cd; color:#856404; padding:2px 8px; border-radius:12px; font-size:0.78rem; }
 </style>
 """, unsafe_allow_html=True)
-
-# ── Datos de demo ─────────────────────────────────────────────────────────────
-_now = datetime.now()
-
-DEMO_PROCESOS = [
-    {"id": "CCE-001", "entidad": "IDU - Bogotá D.C.", "objeto": "Rehabilitación y mantenimiento vías locales localidad Kennedy", "modalidad": "MINIMA CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 98_000_000, "fecha_cierre": (_now + timedelta(days=4)).isoformat(), "unspsc": "72100000", "departamento": "BOGOTA", "score": 94},
-    {"id": "ANT-002", "entidad": "Gobernación de Antioquia", "objeto": "Construcción puente vehicular vereda El Rosal municipio de Andes", "modalidad": "MENOR CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 320_000_000, "fecha_cierre": (_now + timedelta(days=7)).isoformat(), "unspsc": "72110000", "departamento": "ANTIOQUIA", "score": 88},
-    {"id": "CUN-003", "entidad": "Alcaldía de Zipaquirá", "objeto": "Mejoramiento pistas deportivas colegio Luis Antonio Escobar", "modalidad": "INVITACION ABIERTA", "estado": "INVITACION_ABIERTA", "presupuesto_oficial": 75_000_000, "fecha_cierre": (_now + timedelta(days=12)).isoformat(), "unspsc": "72120000", "departamento": "CUNDINAMARCA", "score": 81},
-    {"id": "INV-004", "entidad": "INVIAS - Regional Boyacá", "objeto": "Rehabilitación carretera secundaria sector El Crucero - La Palma", "modalidad": "LICITACION PUBLICA", "estado": "CONVOCADO", "presupuesto_oficial": 1_850_000_000, "fecha_cierre": (_now + timedelta(days=25)).isoformat(), "unspsc": "72000000", "departamento": "BOYACA", "score": 62},
-    {"id": "SOA-005", "entidad": "Alcaldía de Soacha", "objeto": "Suministro e instalación tubería acueducto sector rural La Chacua", "modalidad": "MENOR CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 145_000_000, "fecha_cierre": (_now + timedelta(days=6)).isoformat(), "unspsc": "72150000", "departamento": "CUNDINAMARCA", "score": 85},
-    {"id": "VAL-006", "entidad": "CVC - Valle del Cauca", "objeto": "Construcción obras de control erosión río Cauca sector norte", "modalidad": "LICITACION PUBLICA", "estado": "CONVOCADO", "presupuesto_oficial": 2_400_000_000, "fecha_cierre": (_now + timedelta(days=18)).isoformat(), "unspsc": "72000000", "departamento": "VALLE DEL CAUCA", "score": 55},
-    {"id": "ATL-007", "entidad": "Alcaldía de Barranquilla", "objeto": "Pavimentación carrera 8 entre calles 45 y 72", "modalidad": "MENOR CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 285_000_000, "fecha_cierre": (_now + timedelta(days=9)).isoformat(), "unspsc": "72100000", "departamento": "ATLANTICO", "score": 79},
-    {"id": "SAN-008", "entidad": "Alcaldía de Bucaramanga", "objeto": "Remodelación parque barrio La Concordia", "modalidad": "MINIMA CUANTIA", "estado": "INVITACION_ABIERTA", "presupuesto_oficial": 45_000_000, "fecha_cierre": (_now + timedelta(days=3)).isoformat(), "unspsc": "72120000", "departamento": "SANTANDER", "score": 91},
-    {"id": "NAR-009", "entidad": "Gobernación de Nariño", "objeto": "Construcción alcantarillado pluvial zona centro Pasto", "modalidad": "MENOR CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 198_000_000, "fecha_cierre": (_now + timedelta(days=14)).isoformat(), "unspsc": "72150000", "departamento": "NARINO", "score": 74},
-    {"id": "HUI-010", "entidad": "Alcaldía de Neiva", "objeto": "Mantenimiento preventivo puentes peatonales zona urbana", "modalidad": "MINIMA CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 62_000_000, "fecha_cierre": (_now + timedelta(days=5)).isoformat(), "unspsc": "72110000", "departamento": "HUILA", "score": 87},
-    {"id": "COR-011", "entidad": "Municipio de Montería", "objeto": "Instalación alumbrado público LED corredores viales", "modalidad": "INVITACION ABIERTA", "estado": "CONVOCADO", "presupuesto_oficial": 410_000_000, "fecha_cierre": (_now + timedelta(days=22)).isoformat(), "unspsc": "72150000", "departamento": "CORDOBA", "score": 67},
-    {"id": "BOG-012", "entidad": "UAESP - Bogotá", "objeto": "Construcción celda transitoria relleno sanitario Doña Juana", "modalidad": "LICITACION PUBLICA", "estado": "EXPRESION_DE_INTERES", "presupuesto_oficial": 3_200_000_000, "fecha_cierre": (_now + timedelta(days=35)).isoformat(), "unspsc": "72000000", "departamento": "BOGOTA", "score": 48},
-    {"id": "CAL-013", "entidad": "Alcaldía de Cali", "objeto": "Rehabilitación andenes y espacio público comuna 15", "modalidad": "MENOR CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 175_000_000, "fecha_cierre": (_now + timedelta(days=8)).isoformat(), "unspsc": "72120000", "departamento": "VALLE DEL CAUCA", "score": 82},
-    {"id": "MED-014", "entidad": "EPM - Medellín", "objeto": "Suministro e instalación válvulas sector 4 red distribución", "modalidad": "REGIMEN ESPECIAL", "estado": "CONVOCADO", "presupuesto_oficial": 520_000_000, "fecha_cierre": (_now + timedelta(days=11)).isoformat(), "unspsc": "40140000", "departamento": "ANTIOQUIA", "score": 58},
-    {"id": "CAQ-015", "entidad": "Gobernación del Caquetá", "objeto": "Mejoramiento vía terciaria sector Puerto Nuevo - La Tagua", "modalidad": "MENOR CUANTIA", "estado": "CONVOCADO", "presupuesto_oficial": 240_000_000, "fecha_cierre": (_now + timedelta(days=10)).isoformat(), "unspsc": "72100000", "departamento": "CAQUETA", "score": 76},
-]
 
 DEPARTAMENTOS_CO = [
     "AMAZONAS", "ANTIOQUIA", "ARAUCA", "ATLANTICO", "BOGOTA", "BOLIVAR",
@@ -153,7 +130,7 @@ def estado_tag(estado):
 
 
 def cargar_procesos():
-    """Retorna (lista_de_dicts, es_demo)."""
+    """Retorna (lista_de_dicts, origen). origen es 'local' o 'vacio'."""
     if _HAS_FILTER and os.path.exists(DB_PATH):
         try:
             df = get_oportunidades_top(DB_PATH, top_n=100)
@@ -162,12 +139,10 @@ def cargar_procesos():
                 for r in records:
                     if "dias_al_cierre" not in r:
                         r["dias_al_cierre"] = dias_al_cierre(r.get("fecha_cierre"))
-                return records, False
+                return records, "local"
         except Exception:
             pass
-    for p in DEMO_PROCESOS:
-        p["dias_al_cierre"] = dias_al_cierre(p["fecha_cierre"])
-    return DEMO_PROCESOS, True
+    return [], "vacio"
 
 
 def cargar_perfil():
@@ -205,7 +180,7 @@ UNSPSC_FAMILIAS = {
 
 
 def cargar_procesos_api(filtros: dict = None) -> tuple:
-    """Retorna (lista_de_dicts, es_demo). Usa API central con fallback a local/demo."""
+    """Retorna (lista_de_dicts, origen). origen es 'api', 'local' o 'vacio'."""
     try:
         from api_client import get_procesos
         params = filtros or {}
@@ -215,24 +190,10 @@ def cargar_procesos_api(filtros: dict = None) -> tuple:
             for p in items:
                 if "dias_al_cierre" not in p:
                     p["dias_al_cierre"] = dias_al_cierre(p.get("fecha_cierre"))
-            return items, False
+            return items, "api"
     except Exception:
         pass
-    # Fallback a datos locales
-    if _HAS_FILTER and os.path.exists(DB_PATH):
-        try:
-            df = get_oportunidades_top(DB_PATH, top_n=100)
-            if not df.empty:
-                records = df.to_dict("records")
-                for r in records:
-                    r["dias_al_cierre"] = dias_al_cierre(r.get("fecha_cierre"))
-                return records, False
-        except Exception:
-            pass
-    # Demo
-    for p in DEMO_PROCESOS:
-        p["dias_al_cierre"] = dias_al_cierre(p["fecha_cierre"])
-    return DEMO_PROCESOS, True
+    return cargar_procesos()
 
 
 def guardar_perfil(perfil):
@@ -376,12 +337,12 @@ with tab1:
     # Eliminar claves con valor None
     filtros_api = {k: v for k, v in filtros_api.items() if v is not None}
 
-    procesos_todos, es_demo = cargar_procesos_api(filtros_api)
+    procesos_todos, origen = cargar_procesos_api(filtros_api)
 
-    if es_demo:
+    if origen == "vacio":
         st.info(
-            "📌 Mostrando **datos de demostración** (15 procesos). "
-            "Ejecuta `python m1_ingestor/ingestor.py` para sincronizar datos reales de SECOP.",
+            "No hay procesos reales cargados. "
+            "Ejecuta `python m1_ingestor/ingestor.py` para sincronizar SECOP.",
             icon="ℹ️",
         )
 
@@ -437,7 +398,9 @@ with tab1:
 
     st.markdown("---")
 
-    if not filtrados:
+    if origen == "vacio":
+        pass
+    elif not filtrados:
         st.warning("No hay procesos que cumplan los filtros seleccionados.")
     else:
         # ── Tabla de resultados ───────────────────────────────────────────────
@@ -537,10 +500,10 @@ with tab2:
             value=1000, step=50,
         )
     with col_inp3:
-        n_oferentes = st.slider("👥 Oferentes estimados", 2, 15, 5)
+        st.caption("El cálculo usa solo las ofertas reales que escribas abajo.")
 
     # Tabla de ofertas rivales
-    st.markdown("**Ofertas de rivales conocidas** *(opcional — máx 10)*")
+    st.markdown("**Ofertas reales de rivales** *(al menos una)*")
     rivales_df_init = pd.DataFrame(
         [{"Rival": f"Rival {i+1}", "Precio (COP)": 0} for i in range(5)]
     )
@@ -568,147 +531,140 @@ with tab2:
     if st.button("⚡ Calcular las 5 Fórmulas", type="primary"):
         if not _HAS_ENGINE:
             st.error("Motor de fórmulas no disponible. Verifica la instalación del módulo m2_formulas.")
+        elif not ofertas_rivales_vals:
+            st.error("Ingresa al menos una oferta real de rival. No se inventan precios.")
         else:
-            with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
-                # Calcular oferta óptima global (sin fórmula conocida)
-                res_global = optimizar_oferta(
-                    presupuesto_oficial=float(po_calc),
-                    pts_max=float(pts_max_calc),
-                    ofertas_historicas=ofertas_rivales_vals,
-                    n_rivales_estimados=n_oferentes,
-                    formula_conocida=None,
-                )
-                # Calcular óptimo para cada fórmula
-                formulas_info = {
-                    "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
-                    "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
-                    "MAB": {"nombre": "Media Aritmética Baja", "riesgo": "Alto"},
-                    "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
-                    "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
-                }
-                resultados_por_formula = {}
-                for cod in ["M", "MG", "MAB", "MAA", "MV"]:
-                    r = optimizar_oferta(
+            formulas_info = {
+                "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
+                "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
+                "MAB": {"nombre": "Media Aritmética Baja", "riesgo": "Alto"},
+                "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
+                "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
+            }
+            try:
+                with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
+                    resultados_por_formula = optimizar_todas(
                         presupuesto_oficial=float(po_calc),
                         pts_max=float(pts_max_calc),
                         ofertas_historicas=ofertas_rivales_vals,
-                        n_rivales_estimados=n_oferentes,
-                        formula_conocida=cod,
                     )
-                    resultados_por_formula[cod] = r
+            except ValueError as exc:
+                st.error(str(exc))
+                resultados_por_formula = None
 
-            st.markdown("---")
-            st.markdown("### Comparativa de las 5 Fórmulas")
+            if resultados_por_formula:
+                st.markdown("---")
+                st.markdown("### Comparativa de las 5 Fórmulas")
 
-            # Tabla comparativa
-            tabla_rows = []
-            for cod, fi in formulas_info.items():
-                r = resultados_por_formula[cod]
-                precio = r["oferta_optima"]
-                pct = r["pct_mejora"] * 100
-                puntaje = r["scores"][cod]
-                tabla_rows.append({
-                    "Fórmula": cod,
-                    "Nombre": fi["nombre"],
-                    "Precio Sugerido": precio,
-                    "% Mejora P.O.": pct,
-                    "Puntaje Esperado": puntaje,
-                    "/ Máx.": pts_max_calc,
-                    "Riesgo": fi["riesgo"],
-                })
+                # Tabla comparativa
+                tabla_rows = []
+                for cod, fi in formulas_info.items():
+                    r = resultados_por_formula[cod]
+                    precio = r["oferta_optima"]
+                    pct = r["pct_mejora"] * 100
+                    puntaje = r["scores"][cod]
+                    tabla_rows.append({
+                        "Fórmula": cod,
+                        "Nombre": fi["nombre"],
+                        "Precio Sugerido": precio,
+                        "% Mejora P.O.": pct,
+                        "Puntaje Esperado": puntaje,
+                        "/ Máx.": pts_max_calc,
+                        "Riesgo": fi["riesgo"],
+                    })
 
-            # Mostrar tabla con radio buttons
-            col_radio_sel = st.radio(
-                "Seleccionar fórmula:",
-                options=[r["Fórmula"] for r in tabla_rows],
-                format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
-                horizontal=True,
-                key="formula_radio",
-            )
-
-            # Header tabla
-            th = st.columns([1, 2, 2, 1, 2, 1])
-            for c, h in zip(th, ["Fórmula", "Nombre", "Precio Sugerido", "% Mejora", "Puntaje", "Riesgo"]):
-                c.markdown(f"**{h}**")
-            st.markdown("<hr style='margin:2px 0 6px 0'>", unsafe_allow_html=True)
-
-            for row in tabla_rows:
-                riesgo_color = {"Alto": "#dc3545", "Medio": "#fd7e14", "Bajo": "#28a745"}.get(row["Riesgo"], "#333")
-                sel = "✅" if row["Fórmula"] == col_radio_sel else "⭕"
-                tc1, tc2, tc3, tc4, tc5, tc6 = st.columns([1, 2, 2, 1, 2, 1])
-                tc1.markdown(f"**{sel} {row['Fórmula']}**")
-                tc2.write(row["Nombre"])
-                tc3.markdown(f"**{fmt_cop(row['Precio Sugerido'])}**")
-                tc4.write(f"{row['% Mejora P.O.']:.1f}%")
-                pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
-                tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
-                tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{row['Riesgo']}</span>", unsafe_allow_html=True)
-                st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
-
-            # Campo "Mi precio final" editable
-            selected_precio = resultados_por_formula[col_radio_sel]["oferta_optima"]
-            st.markdown("---")
-            col_f1, col_f2 = st.columns([2, 1])
-            with col_f1:
-                mi_precio_final = st.number_input(
-                    f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
-                    min_value=1_000_000, max_value=int(po_calc),
-                    value=int(selected_precio), step=100_000, format="%d",
-                    key="mi_precio_final",
+                # Mostrar tabla con radio buttons
+                col_radio_sel = st.radio(
+                    "Seleccionar fórmula:",
+                    options=[r["Fórmula"] for r in tabla_rows],
+                    format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
+                    horizontal=True,
+                    key="formula_radio",
                 )
-            with col_f2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("✅ Usar esta oferta", type="primary"):
-                    oferta_info = {
-                        "formula": col_radio_sel,
-                        "nombre_formula": formulas_info[col_radio_sel]["nombre"],
-                        "precio": mi_precio_final,
-                        "presupuesto_oficial": po_calc,
-                        "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
-                        "fecha": datetime.now().isoformat(),
-                        "proceso": proc_sel.get("id", "") if proc_sel else "",
-                    }
-                    st.session_state.oferta_guardada = oferta_info
-                    # Guardar en historial del perfil
-                    perfil = st.session_state.perfil
-                    perfil.setdefault("historial_ofertas", []).append(oferta_info)
-                    guardar_perfil(perfil)
-                    st.success(
-                        f"✅ Oferta guardada: **{fmt_cop(mi_precio_final)}** "
-                        f"con fórmula **{col_radio_sel}** ({formulas_info[col_radio_sel]['nombre']})"
+
+                # Header tabla
+                th = st.columns([1, 2, 2, 1, 2, 1])
+                for c, h in zip(th, ["Fórmula", "Nombre", "Precio Sugerido", "% Mejora", "Puntaje", "Riesgo"]):
+                    c.markdown(f"**{h}**")
+                st.markdown("<hr style='margin:2px 0 6px 0'>", unsafe_allow_html=True)
+
+                for row in tabla_rows:
+                    riesgo_color = {"Alto": "#dc3545", "Medio": "#fd7e14", "Bajo": "#28a745"}.get(row["Riesgo"], "#333")
+                    sel = "✅" if row["Fórmula"] == col_radio_sel else "⭕"
+                    tc1, tc2, tc3, tc4, tc5, tc6 = st.columns([1, 2, 2, 1, 2, 1])
+                    tc1.markdown(f"**{sel} {row['Fórmula']}**")
+                    tc2.write(row["Nombre"])
+                    tc3.markdown(f"**{fmt_cop(row['Precio Sugerido'])}**")
+                    tc4.write(f"{row['% Mejora P.O.']:.1f}%")
+                    pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
+                    tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
+                    tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{row['Riesgo']}</span>", unsafe_allow_html=True)
+                    st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
+
+                # Campo "Mi precio final" editable
+                selected_precio = resultados_por_formula[col_radio_sel]["oferta_optima"]
+                st.markdown("---")
+                col_f1, col_f2 = st.columns([2, 1])
+                with col_f1:
+                    mi_precio_final = st.number_input(
+                        f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
+                        min_value=1_000_000, max_value=int(po_calc),
+                        value=int(selected_precio), step=100_000, format="%d",
+                        key="mi_precio_final",
                     )
+                with col_f2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("✅ Usar esta oferta", type="primary"):
+                        oferta_info = {
+                            "formula": col_radio_sel,
+                            "nombre_formula": formulas_info[col_radio_sel]["nombre"],
+                            "precio": mi_precio_final,
+                            "presupuesto_oficial": po_calc,
+                            "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
+                            "fecha": datetime.now().isoformat(),
+                            "proceso": proc_sel.get("id", "") if proc_sel else "",
+                        }
+                        st.session_state.oferta_guardada = oferta_info
+                        # Guardar en historial del perfil
+                        perfil = st.session_state.perfil
+                        perfil.setdefault("historial_ofertas", []).append(oferta_info)
+                        guardar_perfil(perfil)
+                        st.success(
+                            f"✅ Oferta guardada: **{fmt_cop(mi_precio_final)}** "
+                            f"con fórmula **{col_radio_sel}** ({formulas_info[col_radio_sel]['nombre']})"
+                        )
 
-            # Gráfico comparativo de puntajes
-            st.markdown("---")
-            st.markdown("### 📊 Comparativa de Puntajes por Fórmula")
+                # Gráfico comparativo de puntajes
+                st.markdown("---")
+                st.markdown("### 📊 Comparativa de Puntajes por Fórmula")
 
-            fig_bar = go.Figure()
-            colores_formula = {
-                "M": "#1F4E79", "MG": "#28a745", "MAB": "#fd7e14",
-                "MAA": "#6f42c1", "MV": "#dc3545",
-            }
-            puntajes_lista = [resultados_por_formula[c]["scores"][c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
-            nombres_lista = [formulas_info[c]["nombre"] for c in ["M", "MG", "MAB", "MAA", "MV"]]
-            colores_lista = [colores_formula[c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                fig_bar = go.Figure()
+                colores_formula = {
+                    "M": "#1F4E79", "MG": "#28a745", "MAB": "#fd7e14",
+                    "MAA": "#6f42c1", "MV": "#dc3545",
+                }
+                puntajes_lista = [resultados_por_formula[c]["scores"][c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                nombres_lista = [formulas_info[c]["nombre"] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                colores_lista = [colores_formula[c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
 
-            fig_bar.add_trace(go.Bar(
-                y=nombres_lista,
-                x=puntajes_lista,
-                orientation="h",
-                marker_color=colores_lista,
-                text=[f"{p:.0f}" for p in puntajes_lista],
-                textposition="outside",
-            ))
-            fig_bar.update_layout(
-                xaxis_title="Puntaje", xaxis_range=[0, pts_max_calc * 1.1],
-                height=320, margin=dict(l=10, r=40, t=20, b=20),
-                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+                fig_bar.add_trace(go.Bar(
+                    y=nombres_lista,
+                    x=puntajes_lista,
+                    orientation="h",
+                    marker_color=colores_lista,
+                    text=[f"{p:.0f}" for p in puntajes_lista],
+                    textposition="outside",
+                ))
+                fig_bar.update_layout(
+                    xaxis_title="Puntaje", xaxis_range=[0, pts_max_calc * 1.1],
+                    height=320, margin=dict(l=10, r=40, t=20, b=20),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Explicación de fórmulas
-            with st.expander("ℹ️ ¿Cuándo se usa cada fórmula en Colombia?"):
-                st.markdown("""
+                # Explicación de fórmulas
+                with st.expander("ℹ️ ¿Cuándo se usa cada fórmula en Colombia?"):
+                    st.markdown("""
 | Fórmula | Cuándo se usa |
 |---------|---------------|
 | **M — Mediana** | Licitaciones con múltiples oferentes; penaliza valores extremos. Equilibrada. |
@@ -859,8 +815,13 @@ with tab4:
         f"{p.get('id',p.get('id_del_proceso',''))} — {(p.get('objeto') or p.get('titulo',''))[:55]}": p
         for p in procesos_cons
     }
-    proc_cons_key = st.selectbox("Seleccionar proceso", list(opciones_proc.keys()), key="proc_cons_sel")
-    proc_cons = opciones_proc.get(proc_cons_key)
+    proc_cons = None
+    proc_cons_key = None
+    if not opciones_proc:
+        st.info("No hay procesos reales cargados para armar un consorcio.")
+    else:
+        proc_cons_key = st.selectbox("Seleccionar proceso", list(opciones_proc.keys()), key="proc_cons_sel")
+        proc_cons = opciones_proc.get(proc_cons_key)
 
     # Armar lista de posibles miembros
     mi_empresa = perfil4.get("empresa", "Mi empresa")
@@ -1006,7 +967,8 @@ with tab8:
         tasa = n_ganadas / n_ofertas * 100 if n_ofertas else 0
 
         sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Procesos revisados", len(DEMO_PROCESOS))
+        _procesos_locales, _ = cargar_procesos()
+        sc1.metric("Procesos en base local", len(_procesos_locales))
         sc2.metric("Ofertas preparadas", n_ofertas)
         sc3.metric("Ofertas ganadas", n_ganadas)
         sc4.metric("Tasa de éxito", f"{tasa:.0f}%")
@@ -1358,7 +1320,7 @@ with tab7:
 
     # ── Seleccionar proceso ────────────────────────────────────────────────────
     with st.expander("🎯 Proceso objetivo", expanded=True):
-        procesos_bot, es_demo_bot = cargar_procesos()
+        procesos_bot, _origen_bot = cargar_procesos()
 
         # Si viene de Tab 1
         proc_presel = st.session_state.get("proceso_seleccionado")
@@ -1367,22 +1329,26 @@ with tab7:
             for p in procesos_bot
         }
         opciones_keys = list(opciones_bot.keys())
+        proc_bot = {}
 
-        default_idx = 0
-        if proc_presel:
-            pid = proc_presel.get("id") or proc_presel.get("id_del_proceso", "")
-            for i, k in enumerate(opciones_keys):
-                if k.startswith(str(pid)):
-                    default_idx = i
-                    break
+        if not opciones_keys:
+            st.info("No hay procesos reales cargados. Puedes escribir el ID de SECOP II abajo.")
+        else:
+            default_idx = 0
+            if proc_presel:
+                pid = proc_presel.get("id") or proc_presel.get("id_del_proceso", "")
+                for i, k in enumerate(opciones_keys):
+                    if k.startswith(str(pid)):
+                        default_idx = i
+                        break
 
-        proc_bot_key = st.selectbox(
-            "Proceso a ofertar",
-            opciones_keys,
-            index=default_idx,
-            key="bot_proc_sel",
-        )
-        proc_bot = opciones_bot.get(proc_bot_key, {})
+            proc_bot_key = st.selectbox(
+                "Proceso a ofertar",
+                opciones_keys,
+                index=default_idx,
+                key="bot_proc_sel",
+            )
+            proc_bot = opciones_bot.get(proc_bot_key, {})
 
         if proc_bot:
             bot_c1, bot_c2, bot_c3 = st.columns(3)

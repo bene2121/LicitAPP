@@ -82,6 +82,9 @@ def sincronizar_procesos_secop2(db: Session) -> int:
                 url_p = r.get("urlproceso")
                 p.url_proceso = url_p.get("url", "") if isinstance(url_p, dict) else str(url_p or "")
                 p.raw = r
+                p.score = _score_proceso(
+                    p.modalidad, p.estado, p.presupuesto_oficial, p.unspsc, p.fecha_cierre,
+                )
                 total += 1
             except Exception as e:
                 logger.warning(f"Error proceso: {e}")
@@ -122,8 +125,6 @@ def sincronizar_contratos(db: Session) -> int:
                 ct.unspsc             = str(r.get("codigo_unspsc", "") or "")
                 ct.modalidad          = r.get("modalidad_de_contratacion", "")
                 ct.raw                = r
-                if nit_c:
-                    _actualizar_contratista(db, nit_c, r, valor)
                 total += 1
             except Exception as e:
                 logger.warning(f"Error contrato: {e}")
@@ -132,30 +133,122 @@ def sincronizar_contratos(db: Session) -> int:
         offset += PAGE_SIZE
         if len(registros) < PAGE_SIZE:
             break
+    if total:
+        _recalcular_contratistas(db)
     return total
 
-def _actualizar_contratista(db: Session, nit: str, r: dict, valor: float):
-    c = db.get(Contratista, nit)
-    if c is None:
-        c = Contratista(nit=nit)
-        db.add(c)
-    c.nombre            = r.get("nombre_del_contratista", c.nombre or "")
-    c.departamento      = str(r.get("departamento", "") or "").upper()
-    c.total_contratos   = (c.total_contratos or 0) + 1
-    c.valor_total_cop   = (c.valor_total_cop or 0.0) + valor
-    unspsc2 = str(r.get("codigo_unspsc", "") or "")[:2]
-    s = dict(c.sectores_unspsc or {})
-    s[unspsc2] = s.get(unspsc2, 0) + 1
-    c.sectores_unspsc = s
-    depto = str(r.get("departamento", "") or "").upper()
-    d = dict(c.departamentos_ or {})
-    d[depto] = d.get(depto, 0) + 1
-    c.departamentos_ = d
-    mod = r.get("modalidad_de_contratacion", "")
-    if mod:
-        m = dict(c.modalidades or {})
-        m[mod] = m.get(mod, 0) + 1
-        c.modalidades = m
+def _score_proceso(modalidad, estado, presupuesto, unspsc, fecha_cierre) -> float:
+    """Mismo criterio que m3, sin pandas, calculado una vez al guardar."""
+    score = 0.0
+    if isinstance(fecha_cierre, datetime):
+        dias = (fecha_cierre - datetime.now()).days
+        if 3 <= dias <= 15:
+            s_dias = 1.0
+        elif 1 <= dias < 3:
+            s_dias = 0.6
+        elif 15 < dias <= 30:
+            s_dias = 0.8
+        elif 30 < dias <= 60:
+            s_dias = 0.5
+        else:
+            s_dias = 0.2
+    else:
+        s_dias = 0.3
+    score += s_dias * 20
+
+    modalidad_l = str(modalidad or "").lower().strip()
+    modalidades = (
+        ("minima cuantia", 1.0), ("mínima cuantía", 1.0),
+        ("menor cuantia", 0.9), ("menor cuantía", 0.9),
+        ("invitacion abierta", 0.85), ("invitación abierta", 0.85),
+        ("invitacion cerrada", 0.75),
+        ("concurso de meritos", 0.65), ("concurso de méritos", 0.65),
+        ("licitacion publica", 0.5), ("licitación pública", 0.5),
+        ("contratacion directa", 0.4),
+    )
+    s_mod = 0.3
+    for key, val in modalidades:
+        if key in modalidad_l:
+            s_mod = val
+            break
+    score += s_mod * 20
+
+    try:
+        po = float(presupuesto or 0)
+    except (TypeError, ValueError):
+        po = 0.0
+    pmin = float(os.getenv("PRESUPUESTO_MINIMO", "5000000"))
+    pmax = float(os.getenv("PRESUPUESTO_MAXIMO", "500000000"))
+    if pmin <= po <= pmax:
+        s_po = 1.0
+    elif po < pmin:
+        s_po = max(0.0, 1 - (pmin - po) / pmin) if pmin else 0.0
+    else:
+        s_po = max(0.0, 1 - (po - pmax) / pmax) if pmax else 0.0
+    score += s_po * 20
+
+    codigo = str(unspsc or "")
+    prefijos = {
+        p.strip()[:2]
+        for p in os.getenv("UNSPSC_INTERES", "72000000,72100000,72110000,72120000").split(",")
+        if p.strip()
+    }
+    score += 25.0 if any(codigo.startswith(p) for p in prefijos) else 0.0
+
+    estado_u = str(estado or "").upper()
+    if "CONVOCADO" in estado_u:
+        s_estado = 1.0
+    elif "INVITACION" in estado_u or "INVITACIÓN" in estado_u:
+        s_estado = 0.9
+    elif "EXPRESION" in estado_u or "INTERES" in estado_u or "INTERÉS" in estado_u:
+        s_estado = 0.7
+    elif "BORRADOR" in estado_u:
+        s_estado = 0.3
+    else:
+        s_estado = 0.5
+    score += s_estado * 15
+    return round(score, 2)
+
+def _recalcular_contratistas(db: Session) -> None:
+    """Un pase sobre contratos ya guardados. No suma de nuevo en cada sincronizacion."""
+    stats = {}
+    consulta = db.query(
+        Contrato.nit_contratista,
+        Contrato.nombre_contratista,
+        Contrato.valor_contrato,
+        Contrato.departamento,
+        Contrato.unspsc,
+        Contrato.modalidad,
+    ).filter(Contrato.nit_contratista.isnot(None)).filter(Contrato.nit_contratista != "")
+    for nit, nombre, valor, depto, unspsc, mod in consulta.yield_per(2000):
+        item = stats.get(nit)
+        if item is None:
+            item = stats[nit] = {
+                "nit": nit,
+                "nombre": nombre or "",
+                "departamento": depto or "",
+                "total_contratos": 0,
+                "valor_total_cop": 0.0,
+                "sectores_unspsc": {},
+                "modalidades": {},
+                "departamentos_": {},
+            }
+        item["total_contratos"] += 1
+        item["valor_total_cop"] += float(valor or 0)
+        if nombre:
+            item["nombre"] = nombre
+        if depto:
+            item["departamento"] = depto
+            item["departamentos_"][depto] = item["departamentos_"].get(depto, 0) + 1
+        familia = str(unspsc or "")[:2]
+        if familia:
+            item["sectores_unspsc"][familia] = item["sectores_unspsc"].get(familia, 0) + 1
+        if mod:
+            item["modalidades"][mod] = item["modalidades"].get(mod, 0) + 1
+    db.query(Contratista).delete(synchronize_session=False)
+    if stats:
+        db.bulk_insert_mappings(Contratista, list(stats.values()))
+    db.commit()
 
 def run_sync_completa():
     db = SessionLocal()

@@ -242,7 +242,7 @@ def iniciar_scheduler():
         # Sincronizar cada mañana a las 6am
         sched.add_job(job_sincronizar,    "cron", hour=6,       minute=0,  id="sync_secop")
         # Revisar alertas cada 2 horas en horario laboral
-        sched.add_job(job_alertas,        "cron", hour="8-18",  minute=30, id="alertas")
+        sched.add_job(job_alertas,        "cron", hour="8,10,12,14,16,18", minute=30, id="alertas")
         # Alertas de cierre inminente cada mañana a las 7am
         sched.add_job(job_alertas_cierre, "cron", hour=7,       minute=0,  id="alertas_cierre")
         sched.start()
