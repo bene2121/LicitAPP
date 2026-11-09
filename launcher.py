@@ -140,6 +140,7 @@ def _iniciar_streamlit() -> subprocess.Popen:
         "--server.headless", "true",
         "--server.enableXsrfProtection", "true",
         "--browser.gatherUsageStats", "false",
+        "--client.toolbarMode", "viewer",
         "--theme.base", "light",
         "--theme.primaryColor", "#1F4E79",
     ]

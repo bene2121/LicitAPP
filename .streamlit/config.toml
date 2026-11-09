@@ -7,6 +7,10 @@ port = 8501
 enableXsrfProtection = true
 enableCORS = true
 
+[client]
+# Oculta el botón "Deploy" y el menú de desarrollador.
+toolbarMode = "viewer"
+
 [browser]
 gatherUsageStats = false
 

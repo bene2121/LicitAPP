@@ -63,3 +63,12 @@ def test_script_de_windows_es_ascii_con_crlf():
     datos = (RAIZ / "CONSTRUIR_E_INSTALAR.bat").read_bytes()
     datos.decode("ascii")  # sin tildes: cmd.exe las rompe según la página de códigos
     assert b"\r\n" in datos and b"\n" not in datos.replace(b"\r\n", b"")
+
+
+def test_spec_no_excluye_unittest_que_scipy_necesita():
+    # En el .exe, excluir unittest dejaba la calculadora sin motor (scipy.stats lo importa).
+    import re
+    from pathlib import Path
+    spec = (Path(__file__).resolve().parent.parent / "build" / "secop.spec").read_text(encoding="utf-8")
+    linea = next(l for l in spec.splitlines() if l.strip().startswith("excludes = ["))
+    assert '"unittest"' not in linea

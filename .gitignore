@@ -62,3 +62,6 @@ expedientes/*/propuestas/
 .streamlit/secrets.toml
 .env.*
 !.env.example
+
+# Registros del instalador
+construir_e_instalar_log.txt

@@ -45,8 +45,10 @@ try:
     from m2_formulas.comparar import diferencias_formulas
     from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
-except Exception:
+    _ERROR_ENGINE = ""
+except Exception as _e_engine:
     _HAS_ENGINE = False
+    _ERROR_ENGINE = f"{type(_e_engine).__name__}: {_e_engine}"
 
 try:
     from m3_filtrado.process_filter import get_oportunidades_top
@@ -108,6 +110,12 @@ ESTADOS = [
 ]
 
 # DATA_DIR compatible con PyInstaller frozen exe
+def _multiselect(*args, **kwargs):
+    """Multiselect con el texto de ayuda en español."""
+    kwargs.setdefault("placeholder", "Elige una o varias opciones")
+    return st.multiselect(*args, **kwargs)
+
+
 def _get_data_dir():
     if os.environ.get("LICITAPP_DATA_DIR"):
         return os.environ["LICITAPP_DATA_DIR"]
@@ -332,14 +340,14 @@ with tab1:
                                    key="texto_busq_adv")
 
         st.markdown("**📍 Geografía**")
-        deptos_sel = st.multiselect(
+        deptos_sel = _multiselect(
             "Departamento", DEPARTAMENTOS_CO, key="deptos_sel_adv",
             default=perfil_filtros.get("departamentos", []) if usar_perfil else [],
         )
         municipio_txt = st.text_input("Municipio", placeholder="Zipaquirá, Chía...", key="mun_txt_adv")
 
         st.markdown("**🏗️ Sector UNSPSC**")
-        unspsc_sel_labels = st.multiselect(
+        unspsc_sel_labels = _multiselect(
             "Sector / Código UNSPSC", list(UNSPSC_FAMILIAS.keys()),
             default=[k for k, v in UNSPSC_FAMILIAS.items()
                      if v in perfil_filtros.get("sectores_unspsc", [])] if usar_perfil else [],
@@ -348,8 +356,8 @@ with tab1:
         unspsc_codes = [UNSPSC_FAMILIAS[l] for l in unspsc_sel_labels]
 
         st.markdown("**📋 Proceso**")
-        modal_sel  = st.multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
-        estado_sel = st.multiselect(
+        modal_sel  = _multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
+        estado_sel = _multiselect(
             "Estado", ESTADOS, key="estado_sel_adv",
             default=["Presentación de oferta", "Fase de ofertas"] if usar_perfil else [],
         )
@@ -629,7 +637,7 @@ with tab2:
         st.session_state["calc_pedido"] = True
     if st.session_state.get("calc_pedido"):
         if not _HAS_ENGINE:
-            st.error("Motor de fórmulas no disponible. Verifica la instalación del módulo m2_formulas.")
+            st.error(f"Motor de fórmulas no disponible ({_ERROR_ENGINE}). Reinstala LicitApp.")
         else:
             consultas_comp = [linea.strip() for linea in competidores_calc.splitlines() if linea.strip()]
             guia_comp = None
@@ -1004,7 +1012,7 @@ with tab4:
     socios_nombres = [s.get("Razón Social", "") for s in perfil4.get("socios", []) if s.get("Razón Social")]
     miembros_opciones = [mi_empresa] + socios_nombres if mi_empresa else socios_nombres
 
-    miembros_sel = st.multiselect(
+    miembros_sel = _multiselect(
         "Miembros del consorcio",
         options=miembros_opciones,
         default=[mi_empresa] if mi_empresa else [],

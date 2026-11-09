@@ -158,3 +158,8 @@ def test_consorcio_real_vias_del_huila():
     assert [c["id"] for c in r["en_ejecucion"]] == ["CO1.PCCNTR.7174033"]
     assert r["en_ejecucion"][0]["via"] == "socio_consorcio"
     assert [c["id"] for c in r["contraste"]["omitidos"]] == ["CO1.PCCNTR.7174033"]
+
+
+def test_nombre_del_consorcio_no_se_muestra_como_diccionario():
+    r = investigar("CONSORCIO VIAS DEL HUILA 2026", cliente=_cliente_huila)
+    assert r["nombre"] == "CONSORCIO VIAS DEL HUILA 2026"

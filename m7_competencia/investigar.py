@@ -315,7 +315,8 @@ def _linea_encontrada(linea: str, contratos: list[dict]) -> bool:
 
 def _nombre_principal(contratos, grupos, consulta) -> str:
     if grupos:
-        return grupos[0]
+        primero = grupos[0]
+        return primero["nombre"] if isinstance(primero, dict) else str(primero)
     for contrato in contratos:
         if contrato.get("proveedor"):
             return contrato["proveedor"]

@@ -101,7 +101,8 @@ if os.path.isdir(f"{ROOT}/.streamlit"):
 
 # ── Ventana nativa (solo Windows): pywebview + WebView2 + pythonnet ──────────────────────
 runtime_hooks = []
-excludes = ["tkinter", "_tkinter", "unittest", "test", "tests", "pytest",
+# unittest NO se excluye: scipy.stats (fórmula MG) lo importa.
+excludes = ["tkinter", "_tkinter", "test", "tests", "pytest",
             "webview.platforms.cocoa", "webview.platforms.gtk", "webview.platforms.qt",
             "webview.platforms.cef", "IPython", "matplotlib"]
 if ES_WINDOWS:
