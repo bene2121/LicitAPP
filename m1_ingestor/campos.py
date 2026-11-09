@@ -86,7 +86,7 @@ def where_procesos_s2(
     return " AND ".join(partes)
 
 
-def fila_proceso_s2(registro: dict, fecha_descarga: str) -> dict | None:
+def fila_proceso_s2(registro: dict, fecha_descarga: str, canal_oferta: str = "") -> dict | None:
     proceso_id = _texto(registro.get("id_del_portafolio"), registro.get("id_del_proceso"))
     if not proceso_id:
         return None
@@ -128,6 +128,8 @@ def fila_proceso_s2(registro: dict, fecha_descarga: str) -> dict | None:
         ),
         "lotes": lotes,
         "fecha_descarga": fecha_descarga,
+        "nit_entidad": _texto(registro.get("nit_entidad")),
+        "canal_oferta": canal_oferta,
     }
 
 
