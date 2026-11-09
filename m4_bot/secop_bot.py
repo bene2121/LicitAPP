@@ -106,7 +106,9 @@ class SecopBot:
         self._page.click(selector)
 
     def _esperar_y_llenar(self, selector: str, valor: str, descripcion: str = ""):
-        self._registrar(f"Llenar '{descripcion or selector}': {valor[:30]}")
+        pista = f"{selector} {descripcion}".lower()
+        visible = "••••" if any(m in pista for m in ("password", "contrase")) else str(valor)[:30]
+        self._registrar(f"Llenar '{descripcion or selector}': {visible}")
         self._page.wait_for_selector(selector, state="visible")
         self._page.fill(selector, str(valor))
 
@@ -141,8 +143,10 @@ class SecopBot:
                 page_text = self._page.inner_text("body")
                 if "contraseña" in page_text.lower() or "password" in page_text.lower() or "incorrecto" in page_text.lower():
                     raise SecopBotError("Credenciales incorrectas. Verifica usuario y contraseña en SECOP II.")
-                self._registrar("Login posiblemente exitoso (no se detectó menú principal)", "WARNING")
-                return True
+                raise SecopBotError(
+                    "No se pudo confirmar el inicio de sesión en SECOP II. "
+                    "La oferta no continuó."
+                )
         except SecopBotError:
             raise
         except Exception as e:

@@ -21,14 +21,17 @@ from m1_ingestor.db_schema import (
     ofertas as ofertas_table,
     sync_log,
 )
+from m1_ingestor.campos import (
+    fila_oferta,
+    fila_proceso_s2,
+    where_departamentos,
+    where_oferta,
+    where_procesos_s2,
+)
 from m1_ingestor.secop_client import SecopClient, SecopRequestError
 
 logger = logging.getLogger(__name__)
 console = Console()
-
-# Estados de interes para SECOP II
-ESTADOS_INTERES = ("CONVOCADO", "INVITACION_ABIERTA", "EXPRESION_DE_INTERES")
-
 
 # ---------------------------------------------------------------------------
 # Utilidades internas
@@ -113,36 +116,18 @@ def sync_procesos_s2(db_path: str = DB_PATH, filtros_config: Optional[dict] = No
     ultimo_sync = _get_ultimo_sync(engine, "procesos_s2")
     ahora = _now_iso()
 
-    # Construir where clause
-    where_parts = []
-
-    # Filtro incremental
-    if ultimo_sync:
-        where_parts.append(f"fecha_de_ultima_publicaci_n > '{ultimo_sync}'")
-
-    # Filtro de estados
-    estados_soql = ",".join(f"'{e}'" for e in ESTADOS_INTERES)
-    where_parts.append(f"estado_del_proceso in({estados_soql})")
-
-    # Filtro presupuesto
-    where_parts.append(
-        f"precio_base >= {PRESUPUESTO_MIN} AND precio_base <= {PRESUPUESTO_MAX}"
-    )
-
-    # Filtro UNSPSC obras civiles (codigo nivel 72)
-    if UNSPSC_INTERES:
-        unspsc_conditions = " OR ".join(
-            f"unspsc_codigo_primer_nivel like '{p[:2]}%'" for p in UNSPSC_INTERES
-        )
-        where_parts.append(f"({unspsc_conditions})")
-
-    # Filtros externos adicionales
+    depto_where = None
     if filtros_config and "$where" in filtros_config:
-        where_parts.append(f"({filtros_config['$where']})")
-
+        depto_where = filtros_config["$where"]
     params: dict = {
-        "$where": " AND ".join(where_parts),
-        "$order": "fecha_de_ultima_publicaci_n DESC",
+        "$where": where_procesos_s2(
+            PRESUPUESTO_MIN,
+            PRESUPUESTO_MAX,
+            UNSPSC_INTERES,
+            ultimo_sync,
+            depto_where,
+        ),
+        "$order": "fecha_de_ultima_publicaci DESC",
     }
     # Hereda otros parametros SoQL del config si los hay
     if filtros_config:
@@ -172,24 +157,8 @@ def sync_procesos_s2(db_path: str = DB_PATH, filtros_config: Optional[dict] = No
 
         rows = []
         for r in registros:
-            row = {
-                "id_del_proceso": r.get("proceso_de_compra") or r.get("id_del_proceso", ""),
-                "referencia": r.get("referencia_del_proceso", ""),
-                "entidad": r.get("nombre_entidad", ""),
-                "titulo": r.get("objeto_a_contratar", ""),
-                "modalidad": r.get("modalidad_de_contratacion", ""),
-                "estado": r.get("estado_del_proceso", ""),
-                "presupuesto_oficial": _to_float(r.get("precio_base")),
-                "fecha_cierre": r.get("fecha_de_cierre_del_proceso", ""),
-                "unspsc": r.get("unspsc_codigo_primer_nivel", ""),
-                "departamento_entidad": r.get("departamento_entidad", ""),
-                "ciudad_unidad": r.get("ciudad_de_la_unidad_de_contratacion", ""),
-                "url_proceso": r.get("urlproceso", {}).get("url", "") if isinstance(r.get("urlproceso"), dict) else r.get("urlproceso", ""),
-                "fecha_modificacion": r.get("fecha_de_ultima_publicaci_n", ""),
-                "lotes": int(r.get("tiene_lotes", 0) or 0),
-                "fecha_descarga": fecha_descarga,
-            }
-            if row["id_del_proceso"]:
+            row = fila_proceso_s2(r, fecha_descarga)
+            if row:
                 rows.append(row)
             progress.advance(task)
 
@@ -239,15 +208,8 @@ def sync_ofertas(db_path: str = DB_PATH, id_proceso: Optional[str] = None) -> in
 
         rows = []
         for r in registros:
-            row = {
-                "identificador_de_la_oferta": r.get("identificador_de_la_oferta", ""),
-                "id_del_proceso": r.get("id_del_proceso", ""),
-                "nit_oferente": r.get("nit_del_proveedor_oferente", ""),
-                "nombre_oferente": r.get("nombre_del_proveedor_oferente", ""),
-                "propuesta_economica": _to_float(r.get("valor_de_la_oferta")),
-                "fecha_oferta": r.get("fecha_de_presentaci_n_de_la_oferta", ""),
-            }
-            if row["identificador_de_la_oferta"]:
+            row = fila_oferta(r)
+            if row:
                 rows.append(row)
             progress.advance(task)
 
@@ -272,10 +234,9 @@ def run_full_sync(db_path: str = DB_PATH, config=None) -> dict:
 
     filtros = {}
     if config and hasattr(config, "DEPARTAMENTOS") and config.DEPARTAMENTOS:
-        deps_limpios = [d.replace("'", "").strip() for d in config.DEPARTAMENTOS if d]
-        deps = ",".join(f"'{d}'" for d in deps_limpios if d)
-        if deps:
-            filtros["$where"] = f"departamento_entidad in({deps})"
+        clausula = where_departamentos(config.DEPARTAMENTOS)
+        if clausula:
+            filtros["$where"] = clausula
 
     n_s2 = sync_procesos_s2(db_path=db_path, filtros_config=filtros)
     n_ofertas = sync_ofertas(db_path=db_path)
@@ -289,15 +250,6 @@ def run_full_sync(db_path: str = DB_PATH, config=None) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _to_float(value) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Entry point

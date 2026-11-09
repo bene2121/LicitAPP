@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 
@@ -70,10 +70,13 @@ def listar_procesos(
         q_obj = q_obj.filter(Proceso.score >= score_min)
     if dias_cierre_max:
         fecha_limite = _utcnow() + timedelta(days=dias_cierre_max)
-        q_obj = q_obj.filter(
-            Proceso.fecha_cierre <= fecha_limite,
-            Proceso.fecha_cierre >= _utcnow(),
-        )
+        q_obj = q_obj.filter(or_(
+            Proceso.fecha_cierre.is_(None),
+            and_(
+                Proceso.fecha_cierre <= fecha_limite,
+                Proceso.fecha_cierre >= _utcnow(),
+            ),
+        ))
     total = q_obj.count()
     items = (
         q_obj.order_by(Proceso.score.desc(), Proceso.fecha_cierre.asc())

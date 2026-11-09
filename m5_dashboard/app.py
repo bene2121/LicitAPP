@@ -1,5 +1,5 @@
 """Dashboard SECOP Automatizador — Obras Civiles (v2 multipage)."""
-import os, sys, json, sqlite3
+import os, sys, json, sqlite3, unicodedata
 from datetime import datetime
 
 import streamlit as st
@@ -9,9 +9,9 @@ import plotly.express as px
 
 # ── Validación de licencia ─────────────────────────────────────────────────────
 try:
-    from licencias import validar_licencia, LicenciaInvalida
+    from licencias import resolver_acceso, LicenciaInvalida
     try:
-        _LICENCIA_INFO = validar_licencia()
+        _LICENCIA_INFO = resolver_acceso()
     except LicenciaInvalida as _e:
         import streamlit as _st
         _st.set_page_config(page_title="SECOP — Licencia", page_icon="🔒", layout="centered")
@@ -92,7 +92,13 @@ MODALIDADES = [
     "Contratación Directa", "Régimen Especial",
 ]
 
-ESTADOS = ["CONVOCADO", "INVITACION_ABIERTA", "EXPRESION_DE_INTERES"]
+ESTADOS = [
+    "Presentación de oferta",
+    "Fase de ofertas",
+    "Manifestación de interés (Menor Cuantía)",
+    "Fase de Selección (Presentación de ofertas)",
+    "Presentación de observaciones",
+]
 
 # DATA_DIR compatible con PyInstaller frozen exe
 def _get_data_dir():
@@ -104,6 +110,19 @@ DATA_DIR = _get_data_dir()
 PERFIL_PATH = os.path.join(DATA_DIR, "perfil_proponente.json")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _normalizar(s):
+    base = unicodedata.normalize("NFD", str(s or ""))
+    plano = "".join(c for c in base if unicodedata.category(c) != "Mn")
+    return plano.upper().strip()
+
+
+def _departamento(s):
+    plano = _normalizar(s)
+    if "BOGOTA" in plano:
+        return "BOGOTA"
+    return plano
+
 
 def fmt_cop(v):
     try:
@@ -184,6 +203,7 @@ def cargar_procesos_api(filtros: dict = None) -> tuple:
     try:
         from api_client import get_procesos
         params = filtros or {}
+        params.setdefault("page_size", 200)
         resultado = get_procesos(**params)
         if not resultado.get("error") and resultado.get("items"):
             items = resultado["items"]
@@ -290,7 +310,7 @@ with tab1:
         modal_sel  = st.multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
         estado_sel = st.multiselect(
             "Estado", ESTADOS, key="estado_sel_adv",
-            default=["CONVOCADO", "INVITACION_ABIERTA"] if usar_perfil else [],
+            default=["Presentación de oferta", "Fase de ofertas"] if usar_perfil else [],
         )
         fuente_sel = st.radio("Fuente SECOP", ["Ambas", "SECOP I", "SECOP II"],
                               horizontal=True, key="fuente_sel_adv")
@@ -347,18 +367,17 @@ with tab1:
         )
 
     # ── Filtrar ───────────────────────────────────────────────────────────────
-    def _normalizar(s):
-        return str(s).upper().strip()
-
     filtrados = []
     for p in procesos_todos:
         # texto
         if texto_busq:
-            haystack = f"{p.get('objeto','')} {p.get('titulo','')} {p.get('entidad','')} {p.get('id','')}".upper()
-            if texto_busq.upper() not in haystack:
+            haystack = _normalizar(
+                f"{p.get('objeto','')} {p.get('titulo','')} {p.get('entidad','')} {p.get('id','')}"
+            )
+            if _normalizar(texto_busq) not in haystack:
                 continue
         # departamento
-        if deptos_sel and _normalizar(p.get("departamento", "")) not in [d.upper() for d in deptos_sel]:
+        if deptos_sel and _departamento(p.get("departamento") or p.get("departamento_entidad")) not in [_departamento(d) for d in deptos_sel]:
             continue
         # modalidad
         if modal_sel:
@@ -366,7 +385,7 @@ with tab1:
             if not any(_normalizar(m) in p_mod or p_mod in _normalizar(m) for m in modal_sel):
                 continue
         # estado
-        if estado_sel and _normalizar(p.get("estado", "")) not in [e.upper() for e in estado_sel]:
+        if estado_sel and _normalizar(p.get("estado", "")) not in [_normalizar(e) for e in estado_sel]:
             continue
         # presupuesto
         po = float(p.get("presupuesto_oficial", 0) or 0)

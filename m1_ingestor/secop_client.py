@@ -70,7 +70,8 @@ class SecopClient:
         """Descarga ofertas, opcionalmente filtradas por id_proceso."""
         params = {}
         if id_proceso:
-            params["$where"] = f"id_del_proceso='{id_proceso}'"
+            from m1_ingestor.campos import where_oferta
+            params["$where"] = where_oferta(id_proceso)
         return self._paginate(API_OFERTAS, params, max_records=10_000)
 
     # ------------------------------------------------------------------

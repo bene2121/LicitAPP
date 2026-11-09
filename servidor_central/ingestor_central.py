@@ -1,5 +1,5 @@
 """Ingestor central — corre en el VPS cada 6 horas. Descarga SECOP I+II a PostgreSQL."""
-import os, logging, httpx
+import os, logging, unicodedata, httpx
 from datetime import datetime
 from sqlalchemy.orm import Session
 from .db import SessionLocal
@@ -48,34 +48,78 @@ def _parse_valor(v) -> float:
     except Exception:
         return 0.0
 
+def _fold(texto) -> str:
+    base = unicodedata.normalize("NFD", str(texto or ""))
+    return "".join(c for c in base if unicodedata.category(c) != "Mn").strip()
+
+def _norm_departamento(texto) -> str:
+    plano = _fold(texto).upper()
+    if "BOGOTA" in plano:
+        return "BOGOTA"
+    return plano
+
+def _unspsc(texto) -> str:
+    bruto = str(texto or "").strip()
+    if bruto.upper().startswith("V1."):
+        bruto = bruto[3:]
+    digitos = "".join(c for c in bruto if c.isdigit())
+    return digitos or bruto
+
+def _texto(*valores) -> str:
+    for valor in valores:
+        limpio = str(valor or "").strip()
+        if limpio and limpio.lower() not in {"no definido", "none", "null"}:
+            return limpio
+    return ""
+
 def sincronizar_procesos_secop2(db: Session) -> int:
     logger.info("Sincronizando procesos SECOP II...")
     total, offset = 0, 0
-    where = "estado_del_proceso IN ('En Proceso de Seleccion','Convocado','Invitacion Abierta')"
+    fases = (
+        "Presentación de oferta",
+        "Fase de ofertas",
+        "Manifestación de interés (Menor Cuantía)",
+        "Fase de Selección (Presentación de ofertas)",
+        "Presentación de observaciones",
+    )
+    where = (
+        "estado_de_apertura_del_proceso='Abierto' AND precio_base > 0 AND fase in("
+        + ",".join(f"'{f}'" for f in fases)
+        + ")"
+    )
     while True:
         registros = _fetch_page(API_SECOP2, offset, where)
         if not registros:
             break
         for r in registros:
             try:
-                pid = r.get("id_del_proceso") or r.get("numero_del_proceso", "")
+                pid = _texto(r.get("id_del_portafolio"), r.get("id_del_proceso"))
                 if not pid:
                     continue
-                unspsc_raw = str(r.get("codigo_unspsc", "") or "")
+                unspsc_raw = _unspsc(
+                    r.get("codigo_principal_de_categoria") or r.get("codigo_unspsc")
+                )
                 p = db.get(Proceso, pid)
                 if p is None:
                     p = Proceso(id_proceso=pid)
                     db.add(p)
                 p.fuente              = "SECOP2"
-                p.entidad             = r.get("nombre_entidad", "")
+                p.entidad             = _texto(r.get("entidad"), r.get("nombre_entidad"))
                 p.nit_entidad         = str(r.get("nit_entidad", "") or "")
-                p.objeto              = r.get("descripcion_del_proceso") or r.get("nombre_del_procedimiento", "")
-                p.modalidad           = r.get("modalidad_de_contratacion", "")
-                p.estado              = r.get("estado_del_proceso", "")
+                p.objeto              = _texto(
+                    r.get("nombre_del_procedimiento"),
+                    r.get("descripci_n_del_procedimiento"),
+                    r.get("descripcion_del_proceso"),
+                )
+                p.modalidad           = _texto(r.get("modalidad_de_contratacion"))
+                p.estado              = _texto(r.get("fase"), r.get("estado_resumen"), r.get("estado_del_procedimiento"))
                 p.presupuesto_oficial = _parse_valor(r.get("precio_base") or r.get("valor_del_contrato"))
-                p.fecha_cierre        = _parse_fecha(r.get("fecha_de_cierre_del_proceso") or r.get("fecha_limite_de_recepcion_de_propuestas"))
-                p.departamento        = str(r.get("departamento", "") or "").upper()
-                p.municipio           = str(r.get("ciudad", "") or r.get("municipio", "") or "")
+                p.fecha_publicacion   = _parse_fecha(
+                    r.get("fecha_de_publicacion_del") or r.get("fecha_de_ultima_publicaci")
+                )
+                p.fecha_cierre        = None
+                p.departamento        = _norm_departamento(r.get("departamento_entidad") or r.get("departamento"))
+                p.municipio           = _texto(r.get("ciudad_de_la_unidad_de"), r.get("ciudad_entidad"), r.get("ciudad"))
                 p.unspsc              = unspsc_raw
                 p.unspsc_familia      = unspsc_raw[:2] if unspsc_raw else ""
                 p.unspsc_clase        = unspsc_raw[:4] if unspsc_raw else ""
@@ -111,18 +155,18 @@ def sincronizar_contratos(db: Session) -> int:
                 if ct is None:
                     ct = Contrato(id=cid)
                     db.add(ct)
-                nit_c = str(r.get("nit_del_contratista", "") or "")
+                nit_c = _texto(r.get("documento_proveedor"), r.get("nit_del_contratista"))
                 valor = _parse_valor(r.get("valor_del_contrato"))
                 ct.nit_contratista    = nit_c
                 ct.nit_entidad        = str(r.get("nit_entidad", "") or "")
-                ct.nombre_contratista = r.get("nombre_del_contratista", "")
-                ct.entidad            = r.get("nombre_entidad", "")
-                ct.objeto             = r.get("objeto_del_contrato", "")
+                ct.nombre_contratista = _texto(r.get("proveedor_adjudicado"), r.get("nombre_del_contratista"))
+                ct.entidad            = _texto(r.get("nombre_entidad"))
+                ct.objeto             = _texto(r.get("objeto_del_contrato"))
                 ct.valor_contrato     = valor
                 ct.fecha_inicio       = _parse_fecha(r.get("fecha_de_inicio_del_contrato"))
-                ct.departamento       = str(r.get("departamento", "") or "").upper()
-                ct.municipio          = str(r.get("ciudad", "") or "")
-                ct.unspsc             = str(r.get("codigo_unspsc", "") or "")
+                ct.departamento       = _norm_departamento(r.get("departamento"))
+                ct.municipio          = _texto(r.get("ciudad"))
+                ct.unspsc             = _unspsc(r.get("codigo_de_categoria_principal") or r.get("codigo_unspsc"))
                 ct.modalidad          = r.get("modalidad_de_contratacion", "")
                 ct.raw                = r
                 total += 1
@@ -156,14 +200,14 @@ def _score_proceso(modalidad, estado, presupuesto, unspsc, fecha_cierre) -> floa
         s_dias = 0.3
     score += s_dias * 20
 
-    modalidad_l = str(modalidad or "").lower().strip()
+    modalidad_l = _fold(modalidad).lower()
     modalidades = (
-        ("minima cuantia", 1.0), ("mínima cuantía", 1.0),
-        ("menor cuantia", 0.9), ("menor cuantía", 0.9),
-        ("invitacion abierta", 0.85), ("invitación abierta", 0.85),
+        ("minima cuantia", 1.0),
+        ("menor cuantia", 0.9),
+        ("invitacion abierta", 0.85),
         ("invitacion cerrada", 0.75),
-        ("concurso de meritos", 0.65), ("concurso de méritos", 0.65),
-        ("licitacion publica", 0.5), ("licitación pública", 0.5),
+        ("concurso de meritos", 0.65),
+        ("licitacion publica", 0.5),
         ("contratacion directa", 0.4),
     )
     s_mod = 0.3
@@ -187,20 +231,20 @@ def _score_proceso(modalidad, estado, presupuesto, unspsc, fecha_cierre) -> floa
         s_po = max(0.0, 1 - (po - pmax) / pmax) if pmax else 0.0
     score += s_po * 20
 
-    codigo = str(unspsc or "")
+    codigo = _unspsc(unspsc)
     prefijos = {
-        p.strip()[:2]
+        "".join(c for c in p if c.isdigit())[:2]
         for p in os.getenv("UNSPSC_INTERES", "72000000,72100000,72110000,72120000").split(",")
         if p.strip()
     }
-    score += 25.0 if any(codigo.startswith(p) for p in prefijos) else 0.0
+    score += 25.0 if any(codigo.startswith(p) for p in prefijos if p) else 0.0
 
-    estado_u = str(estado or "").upper()
-    if "CONVOCADO" in estado_u:
+    estado_u = _fold(estado).upper()
+    if any(marca in estado_u for marca in ("CONVOCADO", "PRESENTACION DE OFERTA", "FASE DE OFERTAS", "FASE DE SELECCION")):
         s_estado = 1.0
-    elif "INVITACION" in estado_u or "INVITACIÓN" in estado_u:
-        s_estado = 0.9
-    elif "EXPRESION" in estado_u or "INTERES" in estado_u or "INTERÉS" in estado_u:
+    elif "OBSERVACION" in estado_u:
+        s_estado = 0.8
+    elif any(marca in estado_u for marca in ("INVITACION", "MANIFESTACION", "EXPRESION", "INTERES")):
         s_estado = 0.7
     elif "BORRADOR" in estado_u:
         s_estado = 0.3
