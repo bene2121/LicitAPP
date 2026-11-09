@@ -90,6 +90,8 @@ hiddenimports += [
 datas += [
     (f"{ROOT}/m5_dashboard/app.py", "m5_dashboard"),
     (f"{ROOT}/m5_dashboard/__init__.py", "m5_dashboard"),
+    (f"{BUILD}/brand/LicitAPP_logo.png", "brand"),
+    (f"{BUILD}/brand/LicitAPP_icon.png", "brand"),
     # C-1: solo la clave pública; nunca privada.pem.
     (f"{ROOT}/licencias/claves/publica.pem", "licencias/claves"),
     (f"{ROOT}/LICENSE.txt", "."),

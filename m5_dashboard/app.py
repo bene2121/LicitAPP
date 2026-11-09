@@ -56,9 +56,15 @@ try:
 except Exception:
     _HAS_FILTER = False
 
+_base_recursos = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_logo_icono = os.path.join(_base_recursos, "brand", "LicitAPP_icon.png")
+if not os.path.isfile(_logo_icono):
+    _logo_icono = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "brand", "LicitAPP_icon.png")
+_logo_completo = os.path.join(os.path.dirname(_logo_icono), "LicitAPP_logo.png")
+
 st.set_page_config(
-    page_title="LicitApp",
-    page_icon="🏗️",
+    page_title="LicitAPP",
+    page_icon=_logo_icono if os.path.isfile(_logo_icono) else "🏗️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -292,10 +298,15 @@ if "tab_activo" not in st.session_state:
     st.session_state.tab_activo = 0
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.markdown(
-    "<h1 style='margin-bottom:0; color:#1F4E79;'>🏗️ LicitApp <span style='font-size:1rem;font-weight:400;'>— Obras Civiles</span></h1>",
-    unsafe_allow_html=True,
-)
+_encabezado_logo, _encabezado_texto = st.columns([1, 5], vertical_alignment="center")
+with _encabezado_logo:
+    if os.path.isfile(_logo_icono):
+        st.image(_logo_icono, width=105)
+    else:
+        st.markdown("# LicitAPP")
+with _encabezado_texto:
+    st.markdown("<h1 style='margin-bottom:0; color:#0B3266;'>LicitAPP</h1>", unsafe_allow_html=True)
+    st.caption("Ofertas públicas guiadas · Obras civiles · SECOP II")
 
 _dias_lic = _LICENCIA_INFO.get("dias_restantes", 0)
 _plan_lic = str(_LICENCIA_INFO.get("plan", "demo")).upper()
