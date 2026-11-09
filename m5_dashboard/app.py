@@ -38,7 +38,7 @@ from config import DB_PATH
 from seguridad import esc_html, esc_md, nombre_archivo_seguro, guardar_perfil_json, cargar_perfil_json
 from m1_ingestor.entidades import ENTIDADES, es_entidad
 from m6_propuesta.armar import armar_propuesta
-from m6_propuesta.expediente import generar_paquete, leer_expediente, listar_expedientes
+from m6_propuesta.expediente import RAIZ_EXPEDIENTES, generar_paquete, leer_expediente, listar_expedientes
 from m7_competencia.historial_ofertas import estimar_ofertas
 from m7_competencia.investigar import investigar
 try:
@@ -598,6 +598,7 @@ with tab1:
         st.markdown("<hr style='margin:2px 0 8px 0'>", unsafe_allow_html=True)
 
         for i, row in enumerate(rows):
+            _proceso_fila = next((p for p in filtrados if str(p.get("id") or p.get("id_del_proceso", "")) == str(row["_id"])), {})
             score = row["Score 🎯"]
             color = "#28a745" if score >= 75 else ("#fd7e14" if score >= 50 else "#dc3545")
 
@@ -616,6 +617,8 @@ with tab1:
             dias_v = row["Días"]
             dias_color = "red" if isinstance(dias_v, int) and dias_v <= 5 else "inherit"
             c7.markdown(f"<small style='color:{dias_color};font-weight:600'>{esc_html(dias_v)}</small>", unsafe_allow_html=True)
+            if _proceso_fila.get("url_proceso"):
+                c8.link_button("🔗 Ver en SECOP II", _proceso_fila["url_proceso"], width="stretch")
             _ids_guardados = {str(g.get("id") or g.get("id_del_proceso")) for g in st.session_state.perfil.get("procesos_guardados", [])}
             if str(row["_id"]) in _ids_guardados:
                 if c8.button("✖ Quitar de guardados", key=f"btn_quitar_{i}_{row['_id']}"):
@@ -625,13 +628,21 @@ with tab1:
                     guardar_perfil(st.session_state.perfil)
                     st.rerun()
             elif c8.button("⭐ Guardar", key=f"btn_guardar_{i}_{row['_id']}"):
-                for p in filtrados:
-                    if str(p.get("id") or p.get("id_del_proceso", "")) == str(row["_id"]):
-                        _copia = {k: v for k, v in p.items() if isinstance(v, (str, int, float, bool, type(None)))}
-                        _copia["guardado_el"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        st.session_state.perfil.setdefault("procesos_guardados", []).append(_copia)
-                        guardar_perfil(st.session_state.perfil)
-                        break
+                from m7_competencia.entidad import analizar_entidad, guardar_dossier
+                from m7_competencia.investigar import _cliente_publico
+                _cliente_hist = st.session_state.get("_cliente_secop_pruebas") or _cliente_publico
+                try:
+                    with st.spinner("Guardando expediente y analizando dos años de competencia…"):
+                        _analisis = analizar_entidad(_proceso_fila, _cliente_hist, anos=2, filtrar_contexto=True)
+                except Exception as _exc_analisis:
+                    _analisis = {"error": str(_exc_analisis), "oferentes": [], "adjudicatarios": []}
+                _carpeta_dossier = guardar_dossier(_proceso_fila, _analisis, RAIZ_EXPEDIENTES)
+                _copia = {k: v for k, v in _proceso_fila.items() if isinstance(v, (str, int, float, bool, type(None)))}
+                _copia["guardado_el"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                _copia["carpeta_dossier"] = str(_carpeta_dossier)
+                st.session_state.perfil.setdefault("procesos_guardados", []).append(_copia)
+                guardar_perfil(st.session_state.perfil)
+                st.session_state[f"analisis_explorador_{row['_id']}"] = _analisis
                 st.rerun()
             if c8.button("📋 Preparar oferta", key=f"btn_prep_{i}_{row['_id']}"):
                 # Encontrar el proceso completo y guardarlo en session_state
@@ -643,6 +654,78 @@ with tab1:
                     f"✅ Proceso seleccionado: **{esc_md(row['Objeto'])}**. "
                     "Calcula el precio en **🧮 CALCULADORA** y ármala en **📄 PROPUESTA**."
                 )
+
+            with st.expander(f"🔎 Ver detalle y competencia · {row['_id']}", expanded=False):
+                _objeto_completo = _proceso_fila.get("objeto") or _proceso_fila.get("titulo") or "Sin descripción publicada"
+                st.markdown(f"**Objeto completo:** {esc_html(_objeto_completo)}")
+                dc1, dc2, dc3, dc4 = st.columns(4)
+                dc1.metric("Entidad", str(_proceso_fila.get("entidad") or "—")[:28])
+                dc2.metric("Presupuesto", fmt_cop(_proceso_fila.get("presupuesto_oficial", 0)))
+                dc3.metric("Modalidad", str(_proceso_fila.get("modalidad") or "—")[:25])
+                dc4.metric("UNSPSC", str(_proceso_fila.get("unspsc") or "—"))
+                st.caption(f"Referencia: {_proceso_fila.get('referencia') or row['_id']} · "
+                           f"Cierre: {row['Cierre']} · Estado: {_proceso_fila.get('estado') or '—'}")
+                if _proceso_fila.get("url_proceso"):
+                    st.link_button("Abrir expediente completo y documentos en SECOP II", _proceso_fila["url_proceso"],
+                                   key=f"link_detalle_{i}_{row['_id']}")
+                _analisis_key = f"analisis_explorador_{row['_id']}"
+                if st.button("Analizar entidad, modalidad y sector — últimos 2 años",
+                             key=f"btn_analizar_ent_{i}_{row['_id']}"):
+                    from m7_competencia.entidad import analizar_entidad
+                    from m7_competencia.investigar import _cliente_publico
+                    try:
+                        with st.spinner("Buscando oferentes, adjudicatarios y precios publicados…"):
+                            st.session_state[_analisis_key] = analizar_entidad(
+                                _proceso_fila, st.session_state.get("_cliente_secop_pruebas") or _cliente_publico,
+                                anos=2, filtrar_contexto=True)
+                    except Exception as _exc_hist:
+                        st.error(f"No fue posible completar el análisis: {_exc_hist}")
+                _hist = st.session_state.get(_analisis_key)
+                if _hist:
+                    if _hist.get("error"):
+                        st.warning(_hist["error"])
+                    else:
+                        ac1, ac2, ac3, ac4 = st.columns(4)
+                        ac1.metric("Procesos comparables", _hist.get("procesos_contexto", 0))
+                        ac2.metric("Ofertas", _hist.get("ofertas", 0))
+                        ac3.metric("Oferentes", _hist.get("oferentes_unicos", 0))
+                        ac4.metric("Contratos", _hist.get("contratos", 0))
+                        st.caption(f"Periodo: {_hist.get('desde')} a {_hist.get('hasta')}. "
+                                   "Filtro: misma entidad, modalidad y familia UNSPSC.")
+                        if _hist.get("oferentes"):
+                            st.markdown("**Quiénes se presentan y cómo ofertan**")
+                            st.dataframe([{
+                                "Oferente": x["nombre"], "NIT": x["nit"], "Ofertas": x["ofertas"],
+                                "Adjudicaciones": x["adjudicaciones"],
+                                "Promedio bajo P.O.": (f"{x['descuento_promedio']:.2f} %"
+                                                       if x.get("descuento_promedio") is not None else "Sin P.O. comparable"),
+                            } for x in _hist["oferentes"]], hide_index=True, width="stretch")
+                        else:
+                            st.info("No se encontraron ofertas publicadas comparables en los últimos dos años.")
+                        if _hist.get("adjudicatarios"):
+                            st.markdown("**Quiénes recibieron contratos comparables**")
+                            st.dataframe([{
+                                "Adjudicatario": x["nombre"], "Contratos": x["contratos"],
+                                "Valor contratado": fmt_cop(x["valor"]), "Como consorcio/grupo": x["grupos"],
+                            } for x in _hist["adjudicatarios"]], hide_index=True, width="stretch")
+
+                _guardado = next((g for g in st.session_state.perfil.get("procesos_guardados", [])
+                                  if str(g.get("id") or g.get("id_del_proceso")) == str(row["_id"])), None)
+                if _guardado and _guardado.get("carpeta_dossier"):
+                    st.success(f"Expediente local: `{_guardado['carpeta_dossier']}`")
+                    _docs_subidos = st.file_uploader(
+                        "Incorporar documentos descargados de SECOP al expediente",
+                        accept_multiple_files=True, key=f"docs_explorador_{i}_{row['_id']}")
+                    if _docs_subidos:
+                        from seguridad import nombre_archivo_seguro, ruta_dentro_de
+                        from pathlib import Path as _Path
+                        _destino_docs = _Path(_guardado["carpeta_dossier"]) / "0. Documentos SECOP"
+                        for _archivo_doc in _docs_subidos:
+                            _nombre_doc = nombre_archivo_seguro(_Path(_archivo_doc.name).stem, largo=90) + _Path(_archivo_doc.name).suffix.lower()
+                            _ruta_doc = _destino_docs / _nombre_doc
+                            if ruta_dentro_de(_destino_docs, _ruta_doc) and not _ruta_doc.exists():
+                                _ruta_doc.write_bytes(_archivo_doc.getvalue())
+                        st.success("Documentos incorporados al expediente local.")
 
             st.markdown("<hr style='margin:2px 0 6px 0; opacity:0.2'>", unsafe_allow_html=True)
 
