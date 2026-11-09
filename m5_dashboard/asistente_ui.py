@@ -71,7 +71,7 @@ def render(perfil: dict, guardar_perfil, cliente, optimizar_todas=None, diferenc
     elif paso == 1:
         _paso_proceso(cliente)
     elif paso == 2:
-        _paso_evaluacion(perfil, guardar_perfil)
+        _paso_evaluacion(perfil, guardar_perfil, cliente)
     elif paso == 3:
         _paso_precio(cliente, optimizar_todas, diferencias_formulas)
     elif paso == 4:
@@ -344,8 +344,9 @@ def _paso_documentos(perfil: dict) -> None:
 
 
 # ── 3. Evaluación previa ────────────────────────────────────────────────────
-def _paso_evaluacion(perfil: dict, guardar_perfil) -> None:
+def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
     from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total
+    from m7_competencia.entidad import analizar_entidad, extraer_requisitos_pdf
 
     proceso = st.session_state.get("proceso_seleccionado") or {}
     proceso_id = str(proceso.get("id") or proceso.get("referencia") or "proceso")
@@ -355,6 +356,75 @@ def _paso_evaluacion(perfil: dict, guardar_perfil) -> None:
     st.markdown("### Evalúa si puedes participar antes de invertir más tiempo")
     st.info("Copia los valores exactamente del pliego y su matriz de experiencia. LicitApp hace los cálculos y "
             "muestra faltantes; los criterios técnicos ambiguos deben ser confirmados por el responsable de la oferta.")
+
+    st.markdown("#### Ficha del proyecto")
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric("Entidad", str(proceso.get("entidad") or "Sin dato")[:30])
+    f2.metric("Presupuesto", _cop(po))
+    f3.metric("Modalidad", str(proceso.get("modalidad") or "Sin dato")[:30])
+    f4.metric("Cierre", str(proceso.get("fecha_cierre") or "Sin dato")[:20])
+    st.markdown(f"**Objeto:** {esc_md(proceso.get('objeto') or proceso.get('titulo') or 'Sin descripción publicada')}")
+    st.caption(f"Referencia: {proceso.get('referencia') or proceso.get('id')} · "
+               f"UNSPSC: {proceso.get('unspsc') or 'sin dato'} · Estado: {proceso.get('estado') or 'sin dato'}")
+    if proceso.get("url_proceso"):
+        st.link_button("Abrir proceso y documentos oficiales en SECOP II", proceso["url_proceso"])
+
+    with st.expander("Leer requisitos del pliego", expanded=False):
+        st.markdown("Carga el **pliego PDF**. LicitAPP localizará fragmentos sobre experiencia, habilitantes, "
+                    "indicadores, personal y causales de rechazo. No reemplaza las tablas ni las adendas.")
+        # AppTest no implementa el estado binario de file_uploader; el cliente falso
+        # solo se inyecta en pruebas y no existe en la aplicación instalada.
+        pliego = None if "_cliente_secop_pruebas" in st.session_state else st.file_uploader(
+            "Pliego de condiciones en PDF", type=["pdf"], key=f"eval_pliego_{proceso_id}")
+        if pliego and st.button("Analizar pliego", key=f"eval_analizar_pliego_{proceso_id}"):
+            with st.spinner("Leyendo el pliego…"):
+                try:
+                    st.session_state[f"pliego_resultado_{proceso_id}"] = extraer_requisitos_pdf(pliego.getvalue())
+                except ValueError as exc:
+                    st.error(str(exc))
+        lectura = st.session_state.get(f"pliego_resultado_{proceso_id}")
+        if lectura:
+            st.caption(f"Páginas: {lectura['paginas']} · con texto legible: {lectura['legibles']}")
+            st.warning(lectura["aviso"])
+            if not lectura["secciones"]:
+                st.info("No se localizaron secciones automáticamente. Revisa el PDF completo y sus anexos.")
+            for titulo, fragmentos in lectura["secciones"].items():
+                st.markdown(f"**{titulo}**")
+                for fragmento in fragmentos:
+                    st.caption(f"Página {fragmento['pagina']}: …{fragmento['texto']}…")
+
+    with st.expander("Historial de esta entidad — últimos 3 años", expanded=False):
+        st.markdown("Muestra quiénes han presentado ofertas y quiénes han recibido contratos publicados por la entidad. "
+                    "Sirve para conocer recurrencia y competencia; no garantiza quién participará en este proceso.")
+        if st.button("Consultar historial de la entidad", key=f"eval_entidad_{proceso_id}"):
+            try:
+                with st.spinner("Consultando ofertas y contratos de SECOP II…"):
+                    st.session_state[f"entidad_resultado_{proceso_id}"] = analizar_entidad(proceso, cliente)
+            except Exception as exc:
+                st.error(f"No fue posible consultar el historial: {exc}")
+        historia = st.session_state.get(f"entidad_resultado_{proceso_id}")
+        if historia:
+            h1, h2, h3, h4 = st.columns(4)
+            h1.metric("Procesos con ofertas", historia["procesos_con_ofertas"])
+            h2.metric("Ofertas publicadas", historia["ofertas"])
+            h3.metric("Oferentes únicos", historia["oferentes_unicos"])
+            h4.metric("Contratos publicados", historia["contratos"])
+            st.caption(f"Periodo: {historia['desde']} a {historia['hasta']}. {historia['nota']}")
+            if historia["oferentes"]:
+                st.markdown("**Oferentes más frecuentes**")
+                st.dataframe([{
+                    "Oferente": x["nombre"], "NIT": x["nit"], "Ofertas": x["ofertas"],
+                    "Procesos": x["procesos"], "Contratos publicados": x["adjudicaciones"],
+                    "Tasa orientativa": f"{x['tasa_exito']:.1f} %", "Oferta promedio": _cop(x["oferta_promedio"]),
+                } for x in historia["oferentes"]], hide_index=True, width="stretch")
+            else:
+                st.info("SECOP no devolvió ofertas publicadas de esta entidad en el periodo.")
+            if historia["adjudicatarios"]:
+                st.markdown("**Adjudicatarios más frecuentes**")
+                st.dataframe([{
+                    "Adjudicatario": x["nombre"], "NIT": x["nit"], "Contratos": x["contratos"],
+                    "Valor contratado": _cop(x["valor"]), "Como grupo": x["grupos"],
+                } for x in historia["adjudicatarios"]], hide_index=True, width="stretch")
 
     with st.expander("1. Experiencia exigida", expanded=True):
         c1, c2, c3 = st.columns(3)
@@ -423,7 +493,6 @@ def _paso_evaluacion(perfil: dict, guardar_perfil) -> None:
         perfil["evaluaciones_requisitos"] = guardadas
         guardar_perfil(perfil)
         st.session_state["evaluacion_actual"] = evaluacion
-        st.rerun()
 
     evaluacion = st.session_state.get("evaluacion_actual") or previa
     resultado = evaluacion.get("resultado") if isinstance(evaluacion, dict) else None

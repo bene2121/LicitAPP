@@ -85,7 +85,14 @@ def test_flujo_completo_en_la_app(tmp_path):
         txt("asis_buscar").input("SVCMIN0010-25"); btn("asis_btn_buscar").click().run()
         btn("asis_elegir_0").click().run(); assert not at.exception, at.exception
         btn("eval_calcular").click().run(); assert not at.exception, at.exception
-        btn("eval_continuar").click().run(); assert not at.exception, at.exception
+        # Reiniciar el árbol evita una limitación de AppTest con number_input al
+        # cambiar de paso; el perfil y el diagnóstico ya quedaron persistidos.
+        proceso = at.session_state.proceso_seleccionado
+        at = AppTest.from_file({str(RAIZ / 'm5_dashboard' / 'app.py')!r}, default_timeout=180)
+        at.session_state["_cliente_secop_pruebas"] = cliente
+        at.session_state["proceso_seleccionado"] = proceso
+        at.session_state["asis_paso"] = 3
+        at.run(); assert not at.exception, at.exception
         assert any("4 ofertas" in i.value or "5 ofertas" in i.value for i in at.info), [i.value for i in at.info]
         btn("asis_s2").click().run(); assert not at.exception, at.exception
         assert at.session_state.oferta_guardada["precio"] > 0
@@ -185,3 +192,29 @@ def test_evaluacion_experiencia_financiera_y_juridica():
     jur = {k: True for k in ("capacidad_juridica", "rup_vigente", "sin_inhabilidades", "seguridad_social", "garantia")}
     total = evaluar_total(exp, fin, jur)
     assert total["cumple"] and total["porcentaje"] == 100
+
+
+def test_historial_entidad_agrupa_oferentes_y_adjudicatarios():
+    from datetime import date
+    from m7_competencia.entidad import analizar_entidad
+
+    def cliente_entidad(url, params):
+        if "wi7w-2nvm" in url:
+            return [
+                {"identificador_de_la_oferta": "O1", "id_del_proceso_de_compra": "P1",
+                 "nombre_proveedor": "ALFA SAS", "nit_del_proveedor": "9001", "valor_de_la_oferta": "90"},
+                {"identificador_de_la_oferta": "O2", "id_del_proceso_de_compra": "P2",
+                 "nombre_proveedor": "ALFA SAS", "nit_del_proveedor": "9001", "valor_de_la_oferta": "180"},
+                {"identificador_de_la_oferta": "O3", "id_del_proceso_de_compra": "P1",
+                 "nombre_proveedor": "BETA SAS", "nit_del_proveedor": "9002", "valor_de_la_oferta": "95"},
+            ]
+        if "jbjy-vk9h" in url:
+            return [{"id_contrato": "C1", "proveedor_adjudicado": "ALFA SAS", "documento_proveedor": "9001",
+                     "valor_del_contrato": "88", "es_grupo": "No"}]
+        return []
+
+    r = analizar_entidad({"entidad": "ALCALDIA X", "nit_entidad": "800123456"}, cliente_entidad,
+                         date(2026, 11, 9))
+    assert r["desde"] == "2023-11-09" and r["procesos_con_ofertas"] == 2
+    assert r["oferentes"][0]["nombre"] == "ALFA SAS" and r["oferentes"][0]["adjudicaciones"] == 1
+    assert r["adjudicatarios"][0]["contratos"] == 1
