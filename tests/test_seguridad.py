@@ -937,6 +937,16 @@ def test_explorador_escapa_los_datos_remotos(ruta_trial, monkeypatch):
                "estado": "Presentación de oferta", "presupuesto_oficial": 100_000_000, "score": 90,
                "fecha_cierre": cierre, "dias_al_cierre": 10, "departamento": "ANTIOQUIA", "unspsc": "72101500"}
     monkeypatch.setattr(api_client, "get_procesos", lambda **kw: {"items": [dict(proceso)], "total": 1})
+    # El Explorador consulta SECOP II en vivo: se le da la misma fila hostil en formato SECOP.
+    import importlib
+    inv = importlib.import_module("m7_competencia.investigar")
+    fila = {"id_del_portafolio": "CO1.X.1", "id_del_proceso": "CO1.X.1", "entidad": xss,
+            "nombre_del_procedimiento": xss, "modalidad_de_contratacion": xss, "fase": "Presentación de oferta",
+            "precio_base": "100000000", "fecha_de_recepcion_de": cierre[:10] + "T00:00:00.000",
+            "departamento_entidad": "ANTIOQUIA", "codigo_principal_de_categoria": "V1.72101500"}
+    monkeypatch.setattr(inv, "_cliente_publico", lambda url, params: [dict(fila)] if "p6dx" in url else [])
+    import streamlit as st
+    st.cache_data.clear()
     monkeypatch.setattr(validador, "LICENCIA_PATH", str(ruta_trial.parent / "no.lic"))
     at = _app()
     at.run()

@@ -94,3 +94,42 @@ def test_flujo_completo_en_la_app(tmp_path):
     env = dict(os.environ, LICITAPP_DATA_DIR=str(tmp_path / "data"), LICITAPP_EXPEDIENTES=str(tmp_path / "exp"))
     salida = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=600)
     assert "FLUJO_OK secop" in salida.stdout, salida.stdout[-2000:] + salida.stderr[-3000:]
+
+
+def cliente_vivo(url, params):
+    if "p6dx-8zbt" in url:
+        from datetime import date, timedelta
+        fila = dict(PROCESO_SECOP, fecha_de_recepcion_de=(date.today() + timedelta(days=10)).isoformat() + "T00:00:00.000")
+        return [fila]
+    return []
+
+
+def test_where_vivo_solo_procesos_abiertos_y_filtros_seguros():
+    from datetime import date
+    from m1_ingestor.vivo import where_vivo
+    w = where_vivo({"q": "pavimentación' OR '1'='1", "po_min": 1000, "po_max": 5000, "dias_cierre_max": 30}, date(2026, 11, 9))
+    assert "fecha_de_recepcion_de >= '2026-11-09" in w and "precio_base <= 5000" in w
+    assert "'' OR ''1''=''1" in w.replace("PAVIMENTACION", "").upper() or "''1''" in w
+
+
+def test_explorador_en_vivo_y_guardar(tmp_path):
+    script = textwrap.dedent(f"""
+        import sys; sys.path.insert(0, {str(RAIZ)!r}); sys.path.insert(0, {str(RAIZ / 'tests')!r})
+        from test_asistente import cliente_vivo
+        from streamlit.testing.v1 import AppTest
+        at = AppTest.from_file({str(RAIZ / 'm5_dashboard' / 'app.py')!r}, default_timeout=180)
+        at.session_state["_cliente_secop_pruebas"] = cliente_vivo
+        at.run()
+        assert not at.exception, at.exception
+        next(t for t in at.toggle if t.key == "usar_perfil_tog").set_value(False).run()
+        assert any(m.label == "Procesos encontrados" and m.value == "1" for m in at.metric), [(m.label, m.value) for m in at.metric]
+        next(b for b in at.button if (b.key or "").startswith("btn_guardar_")).click().run()
+        assert not at.exception, at.exception
+        assert len(at.session_state.perfil["procesos_guardados"]) == 1
+        next(r for r in at.radio if r.key == "vista_explorador").set_value("⭐ Guardados (1)").run()
+        assert any((b.key or "").startswith("btn_quitar_") for b in at.button)
+        print("VIVO_OK")
+    """)
+    env = dict(os.environ, LICITAPP_DATA_DIR=str(tmp_path / "data"), LICITAPP_EXPEDIENTES=str(tmp_path / "exp"))
+    salida = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=600)
+    assert "VIVO_OK" in salida.stdout, salida.stdout[-2000:] + salida.stderr[-3000:]

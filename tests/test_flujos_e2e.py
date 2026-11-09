@@ -91,8 +91,23 @@ SOCIOS_REALES = [
 ]
 
 
+def fila_secop_vivo(dias_cierre: int = 10) -> dict:
+    """El mismo proceso tal como lo devuelve SECOP II en vivo (dataset p6dx-8zbt)."""
+    cierre = (dt.date.today() + dt.timedelta(days=dias_cierre)).isoformat() + "T00:00:00.000"
+    return {
+        "id_del_portafolio": ID_SECOP, "id_del_proceso": ID_SECOP, "referencia_del_proceso": REFERENCIA,
+        "entidad": "GOBERNACIÓN DEL HUILA", "nit_entidad": NIT_ENTIDAD, "nombre_del_procedimiento": OBJETO,
+        "modalidad_de_contratacion": "Concurso de Méritos", "fase": "Presentación de oferta",
+        "precio_base": str(int(PRECIO_BASE)), "fecha_de_recepcion_de": cierre,
+        "codigo_principal_de_categoria": "V1.72101500", "departamento_entidad": "Huila",
+        "ciudad_de_la_unidad_de": "Neiva", "urlproceso": {"url": "https://community.secop.gov.co/"},
+    }
+
+
 def cliente_consorcio(url, params):
     where = params.get("$where", "")
+    if "p6dx-8zbt" in url:
+        return [fila_secop_vivo()]
     seleccion = params.get("$select", "")
     if "ceth-n4bn" in url:
         if "nombre_participante" in seleccion:  # socios del grupo

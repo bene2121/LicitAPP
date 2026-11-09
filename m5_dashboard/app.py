@@ -262,6 +262,15 @@ def cargar_procesos_api(filtros: dict = None) -> tuple:
     return cargar_procesos()
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _secop_vivo(filtros: tuple):
+    """Procesos abiertos en SECOP II ahora (se refresca cada 3 minutos o con 'Actualizar ahora')."""
+    from m1_ingestor.vivo import buscar_en_vivo
+    from m7_competencia.investigar import _cliente_publico
+    cliente = st.session_state.get("_cliente_secop_pruebas") or _cliente_publico
+    return buscar_en_vivo(dict(filtros), cliente), datetime.now().strftime("%H:%M")
+
+
 def guardar_perfil(perfil):
     """Guarda el perfil SIN contraseñas.
 
@@ -390,7 +399,7 @@ with tab1:
             label_visibility="collapsed",
         )
         dias_max    = st.slider("Días máx. al cierre", 1, 180, 90, key="dias_max_adv")
-        score_min_f = st.slider("Score mínimo", 0, 100, 60, key="score_min_adv")
+        score_min_f = st.slider("Score mínimo", 0, 100, 0, key="score_min_adv")
 
     # Construir filtros para la API
     filtros_api = {}
@@ -427,7 +436,35 @@ with tab1:
     # Eliminar claves con valor None
     filtros_api = {k: v for k, v in filtros_api.items() if v is not None}
 
-    procesos_todos, origen = cargar_procesos_api(filtros_api)
+    _guardados = st.session_state.perfil.setdefault("procesos_guardados", [])
+    _vista = st.radio(
+        "Ver", ["🔴 En SECOP II ahora", f"⭐ Guardados ({len(_guardados)})"],
+        horizontal=True, key="vista_explorador", label_visibility="collapsed",
+    )
+    _ver_guardados = _vista.startswith("⭐")
+    if _ver_guardados:
+        procesos_todos, origen = list(_guardados), "guardados"
+    else:
+        _b1, _b2 = st.columns([1, 3])
+        if _b1.button("🔄 Actualizar ahora", key="btn_actualizar_vivo"):
+            _secop_vivo.clear()
+        if fuente_sel == "Ecopetrol":
+            filtros_api["nit_entidad"] = ENTIDADES["ECOPETROL"]["nit"]
+            filtros_api.pop("entidad", None)
+        elif fuente_sel == "Findeter":
+            filtros_api["nit_entidad"] = ENTIDADES["FINDETER"]["nit"]
+            filtros_api.pop("entidad", None)
+        try:
+            with st.spinner("Consultando SECOP II en vivo…"):
+                procesos_todos, _hora = _secop_vivo(tuple(sorted(
+                    (k, v) for k, v in filtros_api.items()
+                    if k in ("q", "entidad", "nit_entidad", "po_min", "po_max", "dias_cierre_max"))))
+            origen = "vivo"
+            _b2.caption(f"Datos en vivo de SECOP II · consultado {_hora}")
+        except Exception as _exc_vivo:
+            procesos_todos, origen = cargar_procesos()
+            st.warning(f"No se pudo consultar SECOP II ahora ({type(_exc_vivo).__name__}). "
+                       "Se muestra la última copia guardada en este equipo.")
 
     if fuente_especial:
         codigo_fuente = "ECOPETROL" if fuente_sel == "Ecopetrol" else "FINDETER"
@@ -442,7 +479,7 @@ with tab1:
 
     # ── Filtrar ───────────────────────────────────────────────────────────────
     filtrados = []
-    for p in procesos_todos:
+    for p in (procesos_todos if not _ver_guardados else []):
         # texto
         if texto_busq:
             haystack = _normalizar(
@@ -486,6 +523,11 @@ with tab1:
         ):
             continue
         filtrados.append(p)
+
+    if _ver_guardados:
+        filtrados = list(procesos_todos)
+        if not filtrados:
+            st.info("Todavía no has guardado procesos. En **En SECOP II ahora** pulsa ⭐ Guardar en los que quieras revisar después.")
 
     # ── Métricas superiores ───────────────────────────────────────────────────
     total_po = sum(float(p.get("presupuesto_oficial", 0) or 0) for p in filtrados)
@@ -558,6 +600,23 @@ with tab1:
             dias_v = row["Días"]
             dias_color = "red" if isinstance(dias_v, int) and dias_v <= 5 else "inherit"
             c7.markdown(f"<small style='color:{dias_color};font-weight:600'>{esc_html(dias_v)}</small>", unsafe_allow_html=True)
+            _ids_guardados = {str(g.get("id") or g.get("id_del_proceso")) for g in st.session_state.perfil.get("procesos_guardados", [])}
+            if str(row["_id"]) in _ids_guardados:
+                if c8.button("✖ Quitar de guardados", key=f"btn_quitar_{i}_{row['_id']}"):
+                    st.session_state.perfil["procesos_guardados"] = [
+                        g for g in st.session_state.perfil.get("procesos_guardados", [])
+                        if str(g.get("id") or g.get("id_del_proceso")) != str(row["_id"])]
+                    guardar_perfil(st.session_state.perfil)
+                    st.rerun()
+            elif c8.button("⭐ Guardar", key=f"btn_guardar_{i}_{row['_id']}"):
+                for p in filtrados:
+                    if str(p.get("id") or p.get("id_del_proceso", "")) == str(row["_id"]):
+                        _copia = {k: v for k, v in p.items() if isinstance(v, (str, int, float, bool, type(None)))}
+                        _copia["guardado_el"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        st.session_state.perfil.setdefault("procesos_guardados", []).append(_copia)
+                        guardar_perfil(st.session_state.perfil)
+                        break
+                st.rerun()
             if c8.button("📋 Preparar oferta", key=f"btn_prep_{i}_{row['_id']}"):
                 # Encontrar el proceso completo y guardarlo en session_state
                 for p in filtrados:
