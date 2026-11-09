@@ -69,7 +69,8 @@ def generar_licencia_piloto(nit: str, nombre: str, plan: str = "pro", dias: int 
         # Guardar archivo .lic
         out_dir = os.path.join(os.path.dirname(__file__), "licencias_generadas")
         os.makedirs(out_dir, exist_ok=True)
-        lic_file = os.path.join(out_dir, f"licencia_{nit}_piloto.lic")
+        nit_seguro = "".join(c for c in str(nit) if c.isalnum()) or "cliente"
+        lic_file = os.path.join(out_dir, f"licencia_{nit_seguro}_piloto.lic")
         with open(lic_file, "w", encoding="utf-8") as f:
             json.dump(datos, f, ensure_ascii=False, indent=2)
 

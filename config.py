@@ -28,6 +28,8 @@ PRESUPUESTO_MAX = float(os.getenv("PRESUPUESTO_MAXIMO", "500000000"))
 # Base de datos — ruta compatible con PyInstaller frozen exe
 import sys as _sys
 def _data_dir():
+    if os.environ.get("LICITAPP_DATA_DIR"):
+        return os.environ["LICITAPP_DATA_DIR"]
     if getattr(_sys, "frozen", False):
         return os.path.join(os.path.dirname(_sys.executable), "data")
     return os.path.join(os.path.dirname(__file__), "data")

@@ -1,4 +1,5 @@
 """Cliente HTTP para la API Socrata de datos.gov.co (SECOP I y II)."""
+import json
 import os
 import sys
 import time
@@ -8,6 +9,7 @@ from typing import Optional
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from seguridad import MAX_RESPUESTA_BYTES
 from config import (
     API_SECOP1,
     API_SECOP2,
@@ -86,9 +88,22 @@ class SecopClient:
 
         for attempt in range(1, RETRY_COUNT + 1):
             try:
-                resp = self.session.get(url, params=paged_params, timeout=30)
-                resp.raise_for_status()
-                return resp.json()
+                # https con verificación de certificado (requests por defecto), timeout
+                # de conexión/lectura y tope de tamaño para no agotar la memoria.
+                with self.session.get(url, params=paged_params, timeout=(10, 30), stream=True,
+                                      allow_redirects=False) as resp:
+                    resp.raise_for_status()
+                    cuerpo = bytearray()
+                    for trozo in resp.iter_content(chunk_size=65536):
+                        cuerpo += trozo
+                        if len(cuerpo) > MAX_RESPUESTA_BYTES:
+                            raise requests.exceptions.RequestException("Respuesta demasiado grande")
+                datos = json.loads(bytes(cuerpo).decode("utf-8"))
+                if not isinstance(datos, list):
+                    raise requests.exceptions.RequestException("Respuesta inesperada de la API")
+                return datos
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise SecopRequestError(f"Respuesta no válida: {exc}") from exc
             except requests.exceptions.RequestException as exc:
                 if attempt == RETRY_COUNT:
                     logger.error(

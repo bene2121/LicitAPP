@@ -3,7 +3,7 @@
 
 [Setup]
 AppName=LicitApp
-AppVersion=1.0.0
+AppVersion=2.6.0
 AppPublisher=Poly Modules
 AppPublisherURL=https://licitapp.co
 AppSupportURL=mailto:polymodulospvc@gmail.com
@@ -12,8 +12,7 @@ DefaultDirName={autopf}\LicitApp
 DefaultGroupName=LicitApp
 AllowNoIcons=yes
 OutputDir=..\dist\installer
-OutputBaseFilename=LicitApp_Setup_v1.0
-SetupIconFile=icon.ico
+OutputBaseFilename=LicitApp_Setup_v2.6
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -33,17 +32,17 @@ Name: "startupicon"; Description: "Iniciar LicitApp con Windows"; \
   GroupDescription: "Opciones de inicio:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\SECOP_Automatizador\*"; DestDir: "{app}"; \
+Source: "..\dist\LicitApp\*"; DestDir: "{app}"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\LicitApp"; \
-  Filename: "{app}\SECOP_Automatizador.exe"; \
+  Filename: "{app}\LicitApp.exe"; \
   Comment: "Plataforma de LicitApp — Licitaciones Colombia"
 Name: "{group}\Desinstalar LicitApp"; \
   Filename: "{uninstallexe}"
-Name: "{commondesktop}\LicitApp"; \
-  Filename: "{app}\SECOP_Automatizador.exe"; \
+Name: "{autodesktop}\LicitApp"; \
+  Filename: "{app}\LicitApp.exe"; \
   Tasks: desktopicon; \
   Comment: "Plataforma de LicitApp — Licitaciones Colombia"
 
@@ -51,16 +50,15 @@ Name: "{commondesktop}\LicitApp"; \
 Root: HKCU; \
   Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "SECOPAutomatizador"; \
-  ValueData: """{app}\SECOP_Automatizador.exe"""; \
+  ValueData: """{app}\LicitApp.exe"""; \
   Flags: uninsdeletevalue; Tasks: startupicon
 
 [Run]
-Filename: "{app}\SECOP_Automatizador.exe"; \
+Filename: "{app}\LicitApp.exe"; \
   Description: "Abrir LicitApp ahora"; \
   Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\data"
 Type: filesandordirs; Name: "{app}\logs"
 
 [Code]

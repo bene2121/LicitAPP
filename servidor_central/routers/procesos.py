@@ -9,23 +9,24 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 from ..db import get_db
 from ..models import Proceso
+from ..seguridad import like_escape
 
 router = APIRouter()
 
 @router.get("/")
 def listar_procesos(
     db: Session = Depends(get_db),
-    departamento: Optional[str] = Query(None),
-    municipio: Optional[str] = Query(None),
-    unspsc_familia: Optional[str] = Query(None),
-    unspsc_clase: Optional[str] = Query(None),
-    unspsc: Optional[str] = Query(None),
-    modalidad: Optional[str] = Query(None),
-    estado: Optional[str] = Query(None),
-    fuente: Optional[str] = Query(None),
-    q: Optional[str] = Query(None),
-    entidad: Optional[str] = Query(None),
-    nit_entidad: Optional[str] = Query(None),
+    departamento: Optional[str] = Query(None, max_length=200),
+    municipio: Optional[str] = Query(None, max_length=200),
+    unspsc_familia: Optional[str] = Query(None, max_length=200),
+    unspsc_clase: Optional[str] = Query(None, max_length=200),
+    unspsc: Optional[str] = Query(None, max_length=200),
+    modalidad: Optional[str] = Query(None, max_length=200),
+    estado: Optional[str] = Query(None, max_length=200),
+    fuente: Optional[str] = Query(None, max_length=200),
+    q: Optional[str] = Query(None, max_length=200),
+    entidad: Optional[str] = Query(None, max_length=200),
+    nit_entidad: Optional[str] = Query(None, max_length=200),
     po_min: Optional[float] = Query(None),
     po_max: Optional[float] = Query(None),
     score_min: Optional[float] = Query(0.0),
@@ -37,7 +38,7 @@ def listar_procesos(
     if departamento:
         q_obj = q_obj.filter(Proceso.departamento == departamento.upper())
     if municipio:
-        q_obj = q_obj.filter(Proceso.municipio.ilike(f"%{municipio}%"))
+        q_obj = q_obj.filter(Proceso.municipio.ilike(f"%{like_escape(municipio)}%", escape="\\"))
     if unspsc_familia:
         q_obj = q_obj.filter(Proceso.unspsc_familia == unspsc_familia)
     if unspsc_clase:
@@ -45,21 +46,21 @@ def listar_procesos(
     if unspsc:
         q_obj = q_obj.filter(Proceso.unspsc == unspsc)
     if modalidad:
-        q_obj = q_obj.filter(Proceso.modalidad.ilike(f"%{modalidad}%"))
+        q_obj = q_obj.filter(Proceso.modalidad.ilike(f"%{like_escape(modalidad)}%", escape="\\"))
     if estado:
         estados = [e.strip().upper() for e in estado.split(",")]
         q_obj = q_obj.filter(Proceso.estado.in_(estados))
     if fuente:
         q_obj = q_obj.filter(Proceso.fuente == fuente.upper())
     if q:
-        term = f"%{q}%"
+        term = f"%{like_escape(q)}%"
         q_obj = q_obj.filter(or_(
-            Proceso.objeto.ilike(term),
-            Proceso.entidad.ilike(term),
-            Proceso.id_proceso.ilike(term),
+            Proceso.objeto.ilike(term, escape="\\"),
+            Proceso.entidad.ilike(term, escape="\\"),
+            Proceso.id_proceso.ilike(term, escape="\\"),
         ))
     if entidad:
-        q_obj = q_obj.filter(Proceso.entidad.ilike(f"%{entidad}%"))
+        q_obj = q_obj.filter(Proceso.entidad.ilike(f"%{like_escape(entidad)}%", escape="\\"))
     if nit_entidad:
         q_obj = q_obj.filter(Proceso.nit_entidad == nit_entidad)
     if po_min is not None:

@@ -84,7 +84,7 @@ def crear_licencia(nit: str, nombre: str, email: str, plan: str, meses: int, not
     # Guardar archivo de licencia
     out_dir = os.path.join(BASE, "licencias_generadas")
     os.makedirs(out_dir, exist_ok=True)
-    nit_safe = nit.replace("-", "").replace(" ", "")
+    nit_safe = "".join(c for c in nit if c.isalnum()) or "cliente"  # nunca separadores de ruta
     out_path = os.path.join(out_dir, f"licencia_{nit_safe}.lic")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(licencia_json)

@@ -236,3 +236,13 @@ def test_optimizador_tabla_simulacion_tiene_columnas():
     assert isinstance(tabla, pd.DataFrame)
     for col in ["precio", "M", "MG", "MAB", "MAA", "MV", "score_esperado"]:
         assert col in tabla.columns, f"Columna '{col}' no encontrada en tabla_simulacion"
+
+
+def test_grilla_permite_ofertar_el_100_por_ciento():
+    # Concurso de méritos real (SVCMIN0010-25): 34 de 43 ofertas al 100 % del presupuesto.
+    from m2_formulas.optimizador import optimizar_todas
+    presupuesto = 1_288_612_325
+    rivales = [presupuesto] * 34 + [1_288_599_235, 1_288_350_525, 1_257_553_682]
+    resultado = optimizar_todas(presupuesto, 100, rivales)
+    assert resultado["M"]["oferta_optima"] == presupuesto
+    assert len({round(resultado[c]["oferta_optima"]) for c in resultado}) >= 3

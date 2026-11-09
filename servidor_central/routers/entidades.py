@@ -4,14 +4,15 @@ from sqlalchemy import func
 from typing import Optional
 from ..db import get_db
 from ..models import Proceso, Contrato
+from ..seguridad import like_escape
 
 router = APIRouter()
 
 @router.get("/")
 def buscar_entidades(
     db: Session = Depends(get_db),
-    q: Optional[str] = Query(None),
-    departamento: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, max_length=200),
+    departamento: Optional[str] = Query(None, max_length=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
 ):
@@ -21,7 +22,7 @@ def buscar_entidades(
         func.sum(Proceso.presupuesto_oficial).label("presupuesto_total"),
     ).group_by(Proceso.nit_entidad, Proceso.entidad, Proceso.departamento)
     if q:
-        query = query.filter(Proceso.entidad.ilike(f"%{q}%"))
+        query = query.filter(Proceso.entidad.ilike(f"%{like_escape(q)}%", escape="\\"))
     if departamento:
         query = query.filter(Proceso.departamento == departamento.upper())
     total = query.count()

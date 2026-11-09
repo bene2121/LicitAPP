@@ -81,10 +81,12 @@ def _evaluar_grilla(
 
     rivales = _ofertas_reales(ofertas_historicas)
     precio_min = presupuesto_oficial * 0.50
-    precio_max = presupuesto_oficial * 0.99
+    precio_max = presupuesto_oficial  # ofertar el 100 % del presupuesto es válido
     paso = presupuesto_oficial * paso_busqueda
     precios = np.arange(precio_min, precio_max + paso * 0.5, paso)
     precios = precios[(precios >= precio_min) & (precios <= precio_max + paso * 1e-9)]
+    # Nunca por encima del presupuesto oficial (sería causal de rechazo).
+    precios = np.minimum(precios, precio_max)
     if precios.size == 0:
         raise ValueError("La grilla de precios quedo vacia.")
 

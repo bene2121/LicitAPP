@@ -35,8 +35,10 @@ except ImportError as _imp_err:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
+from seguridad import esc_html, esc_md, nombre_archivo_seguro, guardar_perfil_json, cargar_perfil_json
 from m1_ingestor.entidades import ENTIDADES, es_entidad
 from m6_propuesta.armar import armar_propuesta
+from m6_propuesta.expediente import generar_paquete, leer_expediente, listar_expedientes
 from m7_competencia.historial_ofertas import estimar_ofertas
 from m7_competencia.investigar import investigar
 try:
@@ -107,6 +109,8 @@ ESTADOS = [
 
 # DATA_DIR compatible con PyInstaller frozen exe
 def _get_data_dir():
+    if os.environ.get("LICITAPP_DATA_DIR"):
+        return os.environ["LICITAPP_DATA_DIR"]
     if getattr(sys, "frozen", False):
         return os.path.join(os.path.dirname(sys.executable), "data")
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -140,6 +144,7 @@ def _tabla_contratos(contratos):
     return [{
         "Contrato": c.get("id", ""),
         "Titular": c.get("titular") or c.get("proveedor", ""),
+        "Vía": {"propio": "Propio", "consorcio": "Por consorcio", "socio": "De un socio", "socio_consorcio": "Socio, en otro consorcio"}.get(c.get("via", ""), ""),
         "Entidad": c.get("entidad", ""),
         "Objeto": (c.get("objeto") or "")[:140],
         "Valor": fmt_cop(c.get("valor", 0)),
@@ -182,11 +187,26 @@ def cargar_procesos():
     return [], "vacio"
 
 
+SMTP_SECRETO_PATH = os.path.join(DATA_DIR, ".smtp_secret")
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _estimar_cache(consultas: tuple, po: float):
+    """Ofertas anteriores de los competidores (cacheado para no repetir consultas en cada rerun)."""
+    return estimar_ofertas(list(consultas), po)
+
+
+@st.cache_data(show_spinner=False)
+def _optimizar_cache(po: float, pts: float, precios: tuple):
+    return optimizar_todas(presupuesto_oficial=po, pts_max=pts, ofertas_historicas=list(precios))
+
+
 def cargar_perfil():
     if os.path.exists(PERFIL_PATH):
         try:
-            with open(PERFIL_PATH, encoding="utf-8") as f:
-                return json.load(f)
+            perfil = cargar_perfil_json(PERFIL_PATH, SMTP_SECRETO_PATH)
+            if perfil is not None:
+                return perfil
         except Exception:
             pass
     return {
@@ -235,9 +255,12 @@ def cargar_procesos_api(filtros: dict = None) -> tuple:
 
 
 def guardar_perfil(perfil):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(PERFIL_PATH, "w", encoding="utf-8") as f:
-        json.dump(perfil, f, ensure_ascii=False, indent=2)
+    """Guarda el perfil SIN contraseñas.
+
+    La clave de aplicación del correo va cifrada con la cuenta de Windows (DPAPI) en
+    un archivo aparte; si el sistema no puede cifrar, no se guarda en disco.
+    """
+    st.session_state["_smtp_cifrado"] = guardar_perfil_json(PERFIL_PATH, SMTP_SECRETO_PATH, perfil)
 
 
 # ── session_state defaults ────────────────────────────────────────────────────
@@ -404,7 +427,8 @@ with tab1:
         # texto
         if texto_busq:
             haystack = _normalizar(
-                f"{p.get('objeto','')} {p.get('titulo','')} {p.get('entidad','')} {p.get('id','')}"
+                f"{p.get('objeto','')} {p.get('titulo','')} {p.get('entidad','')} {p.get('id','')} "
+                f"{p.get('id_del_proceso','')} {p.get('referencia','')}"
             )
             if _normalizar(texto_busq) not in haystack:
                 continue
@@ -502,18 +526,19 @@ with tab1:
 
             c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 2, 3, 2, 2, 1, 1, 2])
             c1.markdown(
-                f"<div class='score-bar-wrap'><span class='score-num' style='color:{color}'>{score}</span></div>",
+                f"<div class='score-bar-wrap'><span class='score-num' style='color:{color}'>{int(score)}</span></div>",
                 unsafe_allow_html=True,
             )
             c1.progress(score / 100)
-            c2.markdown(f"<small>{row['Entidad']}</small>", unsafe_allow_html=True)
-            c3.markdown(f"<small>{row['Objeto']}</small>", unsafe_allow_html=True)
-            c4.markdown(f"<small>{row['Modalidad']}</small>", unsafe_allow_html=True)
-            c5.markdown(f"<small>**{row['P.O. (COP)']}**</small>", unsafe_allow_html=True)
-            c6.markdown(f"<small>{row['Cierre']}</small>", unsafe_allow_html=True)
+            # Datos remotos (SECOP): se escapan antes de insertarlos como HTML.
+            c2.markdown(f"<small>{esc_html(row['Entidad'])}</small>", unsafe_allow_html=True)
+            c3.markdown(f"<small>{esc_html(row['Objeto'])}</small>", unsafe_allow_html=True)
+            c4.markdown(f"<small>{esc_html(row['Modalidad'])}</small>", unsafe_allow_html=True)
+            c5.markdown(f"<small><b>{esc_html(row['P.O. (COP)'])}</b></small>", unsafe_allow_html=True)
+            c6.markdown(f"<small>{esc_html(row['Cierre'])}</small>", unsafe_allow_html=True)
             dias_v = row["Días"]
             dias_color = "red" if isinstance(dias_v, int) and dias_v <= 5 else "inherit"
-            c7.markdown(f"<small style='color:{dias_color};font-weight:600'>{dias_v}</small>", unsafe_allow_html=True)
+            c7.markdown(f"<small style='color:{dias_color};font-weight:600'>{esc_html(dias_v)}</small>", unsafe_allow_html=True)
             if c8.button("📋 Preparar oferta", key=f"btn_prep_{i}_{row['_id']}"):
                 # Encontrar el proceso completo y guardarlo en session_state
                 for p in filtrados:
@@ -521,7 +546,7 @@ with tab1:
                         st.session_state.proceso_seleccionado = p
                         break
                 st.info(
-                    f"✅ Proceso seleccionado: **{row['Objeto']}**. "
+                    f"✅ Proceso seleccionado: **{esc_md(row['Objeto'])}**. "
                     "Calcula el precio en **🧮 CALCULADORA** y ármala en **📄 PROPUESTA**."
                 )
 
@@ -585,6 +610,12 @@ with tab2:
         if float(r["Precio (COP)"] or 0) > 0
     ]
 
+    st.checkbox(
+        "Incluir ofertas atípicas (bajo el 50 % o sobre el presupuesto)",
+        key="incluir_atipicas",
+        help="En SECOP hay ofertas digitadas con un cero de menos o por encima del presupuesto.",
+    )
+
     # Nota informativa fórmulas
     st.info(
         "📌 **¿Cómo se elige la fórmula en Colombia?**  \n"
@@ -595,6 +626,8 @@ with tab2:
     )
 
     if st.button("⚡ Calcular las 5 Fórmulas", type="primary"):
+        st.session_state["calc_pedido"] = True
+    if st.session_state.get("calc_pedido"):
         if not _HAS_ENGINE:
             st.error("Motor de fórmulas no disponible. Verifica la instalación del módulo m2_formulas.")
         else:
@@ -603,7 +636,7 @@ with tab2:
             if consultas_comp:
                 try:
                     with st.spinner("Revisando ofertas anteriores de los competidores…"):
-                        guia_comp = estimar_ofertas(consultas_comp, float(po_calc))
+                        guia_comp = _estimar_cache(tuple(consultas_comp), float(po_calc))
                 except ValueError as exc_guia:
                     st.error(str(exc_guia))
             if guia_comp and guia_comp["competidores"]:
@@ -628,6 +661,15 @@ with tab2:
                     hide_index=True,
                 )
             precios_para_calculo = ofertas_rivales_vals or (guia_comp["precios_guia"] if guia_comp else [])
+            _po = float(po_calc or 0)
+            _atipicas = [v for v in precios_para_calculo if _po > 0 and (v < _po * 0.5 or v > _po)]
+            if _atipicas and not st.session_state.get("incluir_atipicas"):
+                precios_para_calculo = [v for v in precios_para_calculo if v not in _atipicas]
+                st.warning(
+                    "Se dejaron fuera " + str(len(_atipicas)) + " ofertas atípicas (bajo el 50 % o sobre el "
+                    "presupuesto): " + ", ".join(fmt_cop(v) for v in _atipicas)
+                    + ". Marca **Incluir ofertas atípicas** si quieres usarlas."
+                )
             if not precios_para_calculo:
                 st.error(
                     "Hace falta al menos una oferta de este proceso, "
@@ -644,10 +686,8 @@ with tab2:
                 }
                 try:
                     with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
-                        resultados_por_formula = optimizar_todas(
-                            presupuesto_oficial=float(po_calc),
-                            pts_max=float(pts_max_calc),
-                            ofertas_historicas=precios_para_calculo,
+                        resultados_por_formula = _optimizar_cache(
+                            float(po_calc), float(pts_max_calc), tuple(precios_para_calculo),
                         )
                         if not ofertas_rivales_vals:
                             st.caption(
@@ -704,7 +744,7 @@ with tab2:
                         tc4.write(f"{row['% Mejora P.O.']:.1f}%")
                         pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
                         tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
-                        tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{row['Riesgo']}</span>", unsafe_allow_html=True)
+                        tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{esc_html(row['Riesgo'])}</span>", unsafe_allow_html=True)
                         st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
 
                     diffs = diferencias_formulas(resultados_por_formula)
@@ -743,7 +783,7 @@ with tab2:
                             f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
                             min_value=1_000_000, max_value=int(po_calc),
                             value=int(selected_precio), step=100_000, format="%d",
-                            key="mi_precio_final",
+                            key=f"mi_precio_final_{col_radio_sel}_{int(selected_precio)}",
                         )
                     with col_f2:
                         st.markdown("<br>", unsafe_allow_html=True)
@@ -1173,6 +1213,11 @@ with tab8:
             st.session_state.perfil = perfil5
             guardar_perfil(perfil5)
             st.success("✅ Configuración guardada.")
+            if perfil5.get("smtp_pass") and not st.session_state.get("_smtp_cifrado", True):
+                st.warning(
+                    "La contraseña del correo NO se guardó en disco (este equipo no puede cifrarla). "
+                    "Defínela como variable SMTP_PASS en el archivo .env para las alertas automáticas."
+                )
 
         st.markdown("---")
         col_alert1, col_alert2 = st.columns([2, 1])
@@ -1234,7 +1279,21 @@ with tab5:
             elif not hallazgo.get("en_ejecucion") and not hallazgo.get("otros") and not hallazgo.get("socios"):
                 st.warning("No hay contratos públicos con ese NIT o ese nombre.")
             else:
-                st.markdown(f"### {hallazgo['nombre']}")
+                st.markdown(f"### {esc_md(hallazgo['nombre'])}")
+                if hallazgo.get("consorcios") and hallazgo.get("nits"):
+                    st.markdown(f"**Consorcios y uniones temporales donde participa ({len(hallazgo['consorcios'])})**")
+                    st.dataframe(
+                        [{
+                            "Consorcio": g["nombre"],
+                            "Código SECOP": g["codigo"],
+                            "Su participación %": g["participacion"],
+                            "Líder": "Sí" if g["lider"] else "No",
+                            "Creado": g["creado"],
+                            "Contratos en ejecución": g.get("en_ejecucion", 0),
+                        } for g in hallazgo["consorcios"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
                 if hallazgo["es_plural"]:
                     st.markdown("**Socios del consorcio o unión temporal**")
                     if hallazgo["socios"]:
@@ -1294,7 +1353,7 @@ with tab5:
             if data.get("error"):
                 st.warning(f"⚠️ {data['error']}")
             else:
-                st.markdown(f"### {data.get('nombre','N/A')} — NIT {data.get('nit','')}")
+                st.markdown(f"### {esc_md(data.get('nombre','N/A'))} — NIT {esc_md(data.get('nit',''))}")
                 rc1, rc2, rc3 = st.columns(3)
                 rc1.metric("Contratos ganados", data.get("total_contratos", 0))
                 rc2.metric("Valor total", fmt_cop(data.get("valor_total_cop", 0)))
@@ -1340,7 +1399,7 @@ with tab5:
             if pred.get("error"):
                 st.warning(f"⚠️ {pred['error']}")
             else:
-                st.markdown(f"**Entidad:** {pred.get('entidad','')} | **Sector UNSPSC:** {pred.get('sector_unspsc','')}")
+                st.markdown(f"**Entidad:** {esc_md(pred.get('entidad',''))} | **Sector UNSPSC:** {esc_md(pred.get('sector_unspsc',''))}")
                 rivales = pred.get("rivales_probables", [])
                 if rivales:
                     st.dataframe(pd.DataFrame(rivales), use_container_width=True, hide_index=True)
@@ -1359,6 +1418,9 @@ with tab5:
                     ents = get_entidades(q=ent_q, departamento=ent_depto if ent_depto else None)
                 except Exception as _e:
                     ents = {"error": str(_e), "items": []}
+            st.session_state["ents_res"] = ents
+        ents = st.session_state.get("ents_res")
+        if ents:
             if ents.get("error"):
                 st.warning(ents["error"])
             elif not ents.get("items"):
@@ -1380,7 +1442,7 @@ with tab5:
                     if det.get("error"):
                         st.warning(det["error"])
                     else:
-                        st.markdown(f"### {det.get('nombre','')} — {det.get('departamento','')}")
+                        st.markdown(f"### {esc_md(det.get('nombre',''))} — {esc_md(det.get('departamento',''))}")
                         st.metric("Procesos históricos", det.get("total_procesos", 0))
                         col_e1, col_e2 = st.columns(2)
                         with col_e1:
@@ -1431,7 +1493,7 @@ with tab6:
 
     # ── Lista de watchlist ─────────────────────────────────────────────────────
     if not watchlist:
-        st.info("📭 No tienes procesos en seguimiento. Agrégalos arriba o con el botón '📋 Preparar oferta' en el Explorador.")
+        st.info("📭 No tienes procesos en seguimiento. Escribe arriba el ID del proceso (por ejemplo, el CO1.REQ… del Explorador) y pulsa **Agregar**.")
     else:
         col_ws_h1, col_ws_h2 = st.columns([3, 1])
         col_ws_h1.markdown(f"**{len(watchlist)} proceso(s) en seguimiento:**")
@@ -1473,7 +1535,7 @@ with tab6:
                         else "#1F4E79"
                     )
                     wc2.markdown(
-                        f"**Estado:** <span style='color:{estado_col};font-weight:700'>{w['ultimo_estado']}</span>",
+                        f"**Estado:** <span style='color:{estado_col};font-weight:700'>{esc_html(w['ultimo_estado'])}</span>",
                         unsafe_allow_html=True,
                     )
                 alertas_ws = wc3.checkbox("🔔 Alertas email", value=w.get("alertas", True),
@@ -1533,7 +1595,7 @@ with tab7:
             else:
                 st.warning("Falta: " + ", ".join(_paquete["faltantes"]))
             st.text_area("Carta de oferta", _paquete["carta"], height=260)
-            _nombre_archivo = f"propuesta_{_paquete['proceso']['id']}.txt"
+            _nombre_archivo = f"propuesta_{nombre_archivo_seguro(_paquete['proceso']['id'], defecto='proceso')}.txt"
             st.download_button(
                 "Descargar carta de oferta",
                 data=_paquete["carta"].encode("utf-8"),
@@ -1550,7 +1612,7 @@ with tab7:
                 st.download_button(
                     "Descargar correo para Findeter",
                     data=_correo_txt.encode("utf-8"),
-                    file_name=f"correo_{_paquete['proceso']['id']}.txt",
+                    file_name=f"correo_{nombre_archivo_seguro(_paquete['proceso']['id'], defecto='proceso')}.txt",
                     mime="text/plain",
                     key="btn_descarga_correo",
                 )
@@ -1565,6 +1627,121 @@ with tab7:
                 guardar_perfil(_perfil_prop)
                 st.session_state.perfil = _perfil_prop
                 st.success("Propuesta guardada en el perfil.")
+
+    st.markdown("---")
+    st.subheader("Paquete completo desde un expediente real")
+    st.caption(
+        "Usa como plantilla una propuesta ya armada (carpeta en `expedientes/`). "
+        "LicitApp copia el mismo orden de carpetas, actualiza los formatos Word con el "
+        "proceso elegido y marca lo que debes firmar, renovar o rehacer. No inventa documentos."
+    )
+    _expedientes = [x for x in listar_expedientes() if x["cargado"]]
+    if not _expedientes:
+        st.info("Copia la carpeta de la propuesta en `expedientes/<nombre>/` para usarla aquí.")
+    else:
+        _exp_sel = st.selectbox(
+            "Expediente plantilla",
+            [x["nombre"] for x in _expedientes],
+            key="exp_sel",
+        )
+        _exp_ruta = next(x["ruta"] for x in _expedientes if x["nombre"] == _exp_sel)
+        try:
+            _exp = leer_expediente(_exp_ruta)
+        except ValueError as _exc_exp:
+            st.error(str(_exc_exp))
+            _exp = None
+        if _exp:
+            _d = _exp["datos"]
+            _e1, _e2, _e3 = st.columns(3)
+            _e1.metric("Proceso del expediente", _d["proceso_id"] or "—")
+            _e2.metric("Entidad", (_d["entidad"] or "—")[:28])
+            _e3.metric("Oferta del expediente", fmt_cop(_d["valor_oferta"]) if _d["valor_oferta"] else "—")
+            st.caption(f"Objeto: {esc_md(_d['objeto'] or '—')}")
+            for _aviso in _exp["avisos"]:
+                st.warning(_aviso)
+            with st.expander(f"Orden de la propuesta ({len(_exp['secciones'])} carpetas)", expanded=False):
+                st.dataframe(
+                    [{"Orden": s["numero"], "Carpeta": s["carpeta"], "Archivos": len(s["archivos"]),
+                      "Formatos Word": sum(a["clase"] == "formato" for a in s["archivos"])}
+                     for s in _exp["secciones"]],
+                    use_container_width=True, hide_index=True,
+                )
+                if _exp["referencia"]:
+                    st.caption("Documentos de referencia (no van en el paquete): "
+                               + ", ".join(r["nombre"] for r in _exp["referencia"]))
+
+            st.markdown("**Consorcio**")
+            _cons_nombre = st.text_input("Nombre del proponente o consorcio", value=_d["proponente"], key="exp_cons_nombre")
+            _cons_df = st.data_editor(
+                pd.DataFrame(_d["integrantes"] or [], columns=["nombre", "nit", "participacion"]),
+                num_rows="dynamic", use_container_width=True, key="exp_cons_integrantes",
+                column_config={"participacion": st.column_config.NumberColumn("Participación %", min_value=0, max_value=100)},
+            )
+            _cons_lista = [r for r in _cons_df.to_dict("records") if str(r.get("nombre") or "").strip()]
+            _suma = sum(float(r.get("participacion") or 0) for r in _cons_lista)
+            if _cons_lista and abs(_suma - 100) > 0.01:
+                st.error(f"Las participaciones suman {_suma:g} %; deben sumar 100 %.")
+            _corregir = st.checkbox(
+                "Corregir en los formatos cualquier otro nombre de consorcio",
+                value=bool(_exp["avisos"]), key="exp_corregir",
+            )
+
+            _g1, _g2, _g3 = st.columns(3)
+            _mismo = _g1.checkbox(
+                "Usar el proceso del expediente", value=not _proc_prop, key="exp_mismo",
+                help="Arma de nuevo la propuesta del mismo proceso del expediente.",
+            )
+            _cierre = _g2.date_input("Fecha de cierre", value=datetime.now().date(), key="exp_cierre")
+            _pct_gar = _g3.number_input("Garantía de seriedad (%)", 0.0, 100.0, 10.0, 0.5, key="exp_pct")
+
+            if _mismo:
+                _proc_exp = {"id": _d["proceso_id"], "entidad": _d["entidad"], "objeto": _d["objeto"],
+                             "presupuesto_oficial": _d["garantia_valor"] * 100 / _pct_gar if _d["garantia_valor"] and _pct_gar else 0}
+                _oferta_exp = _oferta_prop if (_oferta_prop and _oferta_prop.get("precio")) else {
+                    "precio": _d["valor_oferta"], "formula": "", "nombre_formula": "valor del expediente"}
+            else:
+                _proc_exp = _proc_prop
+                _oferta_exp = _oferta_prop
+            if not _proc_exp:
+                st.warning("Elige un proceso en el Explorador o marca **Usar el proceso del expediente**.")
+            elif not _oferta_exp or not _oferta_exp.get("precio"):
+                st.warning("Guarda un precio en la Calculadora (**Usar esta oferta**).")
+            elif st.button("Generar propuesta en la carpeta del expediente", type="primary", key="btn_generar_exp"):
+                try:
+                    _res = generar_paquete(
+                        _exp, _proc_exp, _oferta_exp,
+                        consorcio={"nombre": _cons_nombre, "integrantes": _cons_lista, "corregir_nombres": _corregir},
+                        perfil=_perfil_prop, fecha_cierre=_cierre, pct_garantia=_pct_gar,
+                    )
+                    st.session_state["paquete_expediente"] = _res
+                except (ValueError, OSError) as _exc_gen:
+                    st.error(str(_exc_gen))
+
+            _res = st.session_state.get("paquete_expediente")
+            if _res:
+                st.success(f"Propuesta generada en: `{_res['carpeta']}`")
+                _r1, _r2, _r3 = st.columns(3)
+                _r1.metric("Archivos", len(_res["archivos"]))
+                _r2.metric("Por resolver", len(_res["pendientes"]))
+                _r3.metric("Canal", _res["canal"]["tipo"].upper())
+                st.info(f"{esc_md(_res['canal']['instruccion'])}  \nDestino: {esc_md(_res['canal']['destino'])}")
+                st.dataframe(
+                    [{"Orden": f["orden"], "Carpeta": f["seccion"], "Archivo": f["archivo"],
+                      "Estado": f["estado"], "Qué hacer": f["observacion"]}
+                     for f in sorted(_res["indice"], key=lambda f: f["orden"])],
+                    use_container_width=True, hide_index=True,
+                )
+                import io as _io
+                import zipfile as _zipfile
+                _buf = _io.BytesIO()
+                with _zipfile.ZipFile(_buf, "w", _zipfile.ZIP_DEFLATED) as _z:
+                    for _rel in _res["archivos"]:
+                        _z.write(os.path.join(_res["carpeta"], _rel), _rel)
+                st.download_button(
+                    "Descargar paquete (.zip)", data=_buf.getvalue(),
+                    file_name=f"propuesta_{nombre_archivo_seguro(_res['proceso_id'], defecto='proceso')}.zip", mime="application/zip",
+                    key="btn_zip_exp",
+                )
 
     st.markdown("---")
     st.subheader("Bot de SECOP II, opcional")
@@ -1663,7 +1840,7 @@ with tab7:
             "Valor de la propuesta económica (COP)",
             min_value=1_000_000, max_value=10_000_000_000,
             value=valor_default, step=500_000, format="%d",
-            key="bot_propuesta",
+            key=f"bot_propuesta_{valor_default}",
         )
         pct_dto = (po_default_bot - propuesta_bot) / po_default_bot * 100 if po_default_bot else 0
         st.caption(f"Descuento sobre el P.O.: **{pct_dto:.1f}%** | P.O.: {fmt_cop(po_default_bot)}")
@@ -1756,7 +1933,8 @@ with tab7:
                     "log": [],
                 }
             except Exception as _e:
-                resultado = {"exito": False, "error": str(_e), "log": []}
+                from seguridad import redactar as _redactar
+                resultado = {"exito": False, "error": _redactar(str(_e), (usuario_bot, contrasena_bot)), "log": []}
 
         # ── Mostrar resultado ─────────────────────────────────────────────────
         if resultado.get("exito"):

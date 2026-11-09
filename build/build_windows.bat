@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo   SECOP Automatizador — Build Windows .exe
+echo   LicitApp — Build Windows .exe
 echo ============================================
 echo.
 
@@ -26,7 +26,7 @@ if errorlevel 1 (
 )
 
 echo [2/4] Limpiando builds anteriores...
-if exist "dist\SECOP_Automatizador" rmdir /s /q "dist\SECOP_Automatizador"
+if exist "dist\LicitApp" rmdir /s /q "dist\LicitApp"
 if exist "build\__pycache__"        rmdir /s /q "build\__pycache__"
 
 echo [3/4] Empaquetando con PyInstaller...
@@ -39,7 +39,7 @@ if errorlevel 1 (
 
 echo [4/4] Listo.
 echo.
-echo Ejecutable en: dist\SECOP_Automatizador\SECOP_Automatizador.exe
+echo Ejecutable en: dist\LicitApp\LicitApp.exe
 echo.
 echo Para crear el instalador .exe:
 echo   1. Instala Inno Setup 6 desde https://jrsoftware.org/isinfo.php
