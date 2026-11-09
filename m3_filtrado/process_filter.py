@@ -145,7 +145,12 @@ def get_oportunidades_top(db_path: str, config: dict = None, top_n: int = 50) ->
         return pd.DataFrame()
     conn = sqlite3.connect(db_path)
     try:
-        df = pd.read_sql("SELECT * FROM procesos_s2 LIMIT 5000", conn)
+        df = pd.read_sql(
+            "SELECT * FROM procesos_s2 "
+            "WHERE COALESCE(presupuesto_oficial, 0) > 0 "
+            "LIMIT 5000",
+            conn,
+        )
     except Exception:
         conn.close()
         return pd.DataFrame()

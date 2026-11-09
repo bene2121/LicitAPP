@@ -1,6 +1,7 @@
 """
 Optimizador de oferta SECOP — M2
-Calcula la oferta optima que maximiza el puntaje esperado bajo las 5 metodologias.
+Calcula la oferta optima sobre ofertas reales, en una sola grilla vectorizada.
+No genera precios de rivales.
 """
 
 from __future__ import annotations
@@ -8,11 +9,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from m2_formulas.formula_engine import FormulaEngine
-
-_engine = FormulaEngine()
-
-FORMULAS_VALIDAS = {"M", "MG", "MAB", "MAA", "MV"}
+FORMULAS_VALIDAS = ("M", "MG", "MAB", "MAA", "MV")
+_FORMULAS = set(FORMULAS_VALIDAS)
 
 
 def optimizar_oferta(
@@ -20,88 +18,171 @@ def optimizar_oferta(
     pts_max: float,
     ofertas_historicas: list[float],
     n_rivales_estimados: int = 4,
-    formula_conocida: str = None,   # None = optimizar para todas
-    paso_busqueda: float = 0.001,   # % del presupuesto
+    formula_conocida: str = None,
+    paso_busqueda: float = 0.001,
 ) -> dict:
     """
-    Calcula la oferta optima que maximiza el puntaje esperado.
+    Calcula la oferta que maximiza el puntaje contra las ofertas reales recibidas.
 
-    Retorna:
-    {
-      "oferta_optima": float,
-      "pct_mejora": float,
-      "scores": {"M": x, "MG": x, "MAB": x, "MAA": x, "MV": x},
-      "score_esperado": float,
-      "rango_evaluado": (min, max),
-      "tabla_simulacion": pd.DataFrame  # precio -> scores para graficar
-    }
+    `n_rivales_estimados` se conserva por compatibilidad y no se usa: el calculo
+    solo incluye los precios reales de `ofertas_historicas`.
     """
-    if formula_conocida is not None and formula_conocida not in FORMULAS_VALIDAS:
+    del n_rivales_estimados  # no se simulan oferentes
+    if formula_conocida is not None and formula_conocida not in _FORMULAS:
         raise ValueError(
             f"formula_conocida='{formula_conocida}' no valida. "
-            f"Opciones: {FORMULAS_VALIDAS}"
+            f"Opciones: {_FORMULAS}"
         )
 
-    # 1. Generar rivales simulados
-    if ofertas_historicas and len(ofertas_historicas) >= 1:
-        historico = np.array(ofertas_historicas, dtype=float)
-        media = float(np.mean(historico))
-        std = float(np.std(historico)) if len(historico) > 1 else media * 0.08
-        rng = np.random.default_rng(seed=42)
-        rivales = list(rng.normal(loc=media, scale=std, size=n_rivales_estimados))
-        # Clip para que no salgan valores negativos
-        rivales = [max(r, presupuesto_oficial * 0.40) for r in rivales]
-    else:
-        media = 0.85 * presupuesto_oficial
-        std = 0.08 * presupuesto_oficial
-        rng = np.random.default_rng(seed=42)
-        rivales = list(rng.normal(loc=media, scale=std, size=n_rivales_estimados))
-        rivales = [max(r, presupuesto_oficial * 0.40) for r in rivales]
+    tabla = _evaluar_grilla(presupuesto_oficial, pts_max, ofertas_historicas, paso_busqueda)
+    columna = "score_esperado" if formula_conocida is None else formula_conocida
+    return _resultado(tabla, columna, presupuesto_oficial)
 
-    # 2. Rango de precios a evaluar: 50% a 99% del presupuesto
+
+def optimizar_todas(
+    presupuesto_oficial: float,
+    pts_max: float,
+    ofertas_historicas: list[float],
+    paso_busqueda: float = 0.001,
+) -> dict:
+    """Una sola grilla para las cinco formulas. La clave es el codigo de formula."""
+    tabla = _evaluar_grilla(presupuesto_oficial, pts_max, ofertas_historicas, paso_busqueda)
+    return {
+        cod: _resultado(tabla, cod, presupuesto_oficial)
+        for cod in FORMULAS_VALIDAS
+    }
+
+
+def _ofertas_reales(ofertas_historicas: list[float]) -> np.ndarray:
+    if not ofertas_historicas:
+        raise ValueError(
+            "Se requiere al menos una oferta real de rival. "
+            "No se inventan precios."
+        )
+    arr = np.asarray(list(ofertas_historicas), dtype=float)
+    arr = arr[np.isfinite(arr) & (arr > 0)]
+    if arr.size == 0:
+        raise ValueError(
+            "Las ofertas de rivales deben ser numeros mayores que cero."
+        )
+    return arr
+
+
+def _evaluar_grilla(
+    presupuesto_oficial: float,
+    pts_max: float,
+    ofertas_historicas: list[float],
+    paso_busqueda: float,
+) -> pd.DataFrame:
+    if presupuesto_oficial <= 0:
+        raise ValueError("El presupuesto oficial debe ser mayor que cero.")
+    if paso_busqueda <= 0:
+        raise ValueError("paso_busqueda debe ser mayor que cero.")
+
+    rivales = _ofertas_reales(ofertas_historicas)
     precio_min = presupuesto_oficial * 0.50
     precio_max = presupuesto_oficial * 0.99
     paso = presupuesto_oficial * paso_busqueda
-    precios = np.arange(precio_min, precio_max + paso, paso)
+    precios = np.arange(precio_min, precio_max + paso * 0.5, paso)
+    precios = precios[(precios >= precio_min) & (precios <= precio_max + paso * 1e-9)]
+    if precios.size == 0:
+        raise ValueError("La grilla de precios quedo vacia.")
 
-    # 3. Evaluar cada precio
-    registros = []
-    for precio in precios:
-        pool = rivales + [precio]
-        row = {
-            "precio": precio,
-            "M":   _engine.score_M(precio, pool, pts_max),
-            "MG":  _engine.score_MG(precio, pool, pts_max),
-            "MAB": _engine.score_MAB(precio, pool, pts_max),
-            "MAA": _engine.score_MAA(precio, pool, pts_max),
-            "MV":  _engine.score_MV(precio, pool, pts_max),
-        }
-        # 4. Score esperado segun formula conocida o promedio
-        if formula_conocida is None:
-            row["score_esperado"] = float(
-                np.mean([row["M"], row["MG"], row["MAB"], row["MAA"], row["MV"]])
-            )
-        else:
-            row["score_esperado"] = row[formula_conocida]
-        registros.append(row)
+    n = rivales.size
+    denom = float(n + 1)
+    suma = float(rivales.sum())
+    rmin = float(rivales.min())
+    rmax = float(rivales.max())
+    media = (suma + precios) / denom
+    vmin = np.minimum(rmin, precios)
+    vmax = np.maximum(rmax, precios)
 
-    tabla = pd.DataFrame(registros)
+    ref_m = _mediana_insertada(np.sort(rivales), precios)
+    if np.any(rivales <= 0):
+        ref_mg = ref_m
+    else:
+        ref_mg = np.exp((float(np.log(rivales).sum()) + np.log(precios)) / denom)
+    ref_mab = (media + vmin) / 2.0
+    ref_maa = (media + vmax) / 2.0
 
-    # 5. Precio optimo
-    idx_max = tabla["score_esperado"].idxmax()
-    mejor = tabla.loc[idx_max]
+    s_m = _score_distancia(precios, ref_m, pts_max)
+    s_mg = _score_distancia(precios, ref_mg, pts_max)
+    s_mab = _score_distancia(precios, ref_mab, pts_max)
+    s_maa = _score_maa(precios, ref_maa, pts_max)
+    s_mv = np.where(precios == 0, 0.0, (vmin / precios) * pts_max)
+    s_mv = np.maximum(0.0, s_mv)
+    esperado = (s_m + s_mg + s_mab + s_maa + s_mv) / 5.0
 
+    return pd.DataFrame({
+        "precio": precios,
+        "M": s_m,
+        "MG": s_mg,
+        "MAB": s_mab,
+        "MAA": s_maa,
+        "MV": s_mv,
+        "score_esperado": esperado,
+    })
+
+
+def _mediana_insertada(sorted_r: np.ndarray, prices: np.ndarray) -> np.ndarray:
+    """Mediana de `sorted_r` mas cada precio, sin copiar el arreglo por candidato."""
+    n = sorted_r.size
+    m = n + 1
+    idx = np.searchsorted(sorted_r, prices, side="left")
+    if m % 2 == 1:
+        return _valor_en(m // 2, idx, sorted_r, prices)
+    k2 = m // 2
+    return 0.5 * (
+        _valor_en(k2 - 1, idx, sorted_r, prices)
+        + _valor_en(k2, idx, sorted_r, prices)
+    )
+
+
+def _valor_en(pos: int, idx: np.ndarray, sorted_r: np.ndarray, prices: np.ndarray) -> np.ndarray:
+    pos_arr = np.full(idx.shape, pos, dtype=int)
+    out = np.empty(idx.shape, dtype=float)
+    left = pos_arr < idx
+    mid = pos_arr == idx
+    right = ~left & ~mid
+    if np.any(left):
+        out[left] = sorted_r[pos_arr[left]]
+    if np.any(mid):
+        out[mid] = prices[mid]
+    if np.any(right):
+        out[right] = sorted_r[pos_arr[right] - 1]
+    return out
+
+
+def _score_distancia(precios: np.ndarray, ref: np.ndarray, pts_max: float) -> np.ndarray:
+    seguro = ref != 0
+    dist = np.zeros_like(precios, dtype=float)
+    dist[seguro] = (1.0 - np.abs(precios[seguro] - ref[seguro]) / ref[seguro]) * pts_max
+    return np.maximum(0.0, dist)
+
+
+def _score_maa(precios: np.ndarray, ref: np.ndarray, pts_max: float) -> np.ndarray:
+    seguro = ref != 0
+    bajo = seguro & (precios < ref)
+    alto = seguro & ~bajo
+    score = np.zeros_like(precios, dtype=float)
+    score[bajo] = (1.0 - np.abs(precios[bajo] - ref[bajo]) / ref[bajo]) * pts_max
+    score[alto] = (1.0 - 2.0 * np.abs(precios[alto] - ref[alto]) / ref[alto]) * pts_max
+    return np.maximum(0.0, score)
+
+
+def _resultado(tabla: pd.DataFrame, columna: str, presupuesto_oficial: float) -> dict:
+    idx = tabla[columna].idxmax()
+    mejor = tabla.loc[idx]
+    precio = float(mejor["precio"])
+    if presupuesto_oficial == 0:
+        pct = 0.0
+    else:
+        pct = (presupuesto_oficial - precio) / presupuesto_oficial
     return {
-        "oferta_optima": float(mejor["precio"]),
-        "pct_mejora": _engine.pct_mejora(float(mejor["precio"]), presupuesto_oficial),
-        "scores": {
-            "M":   float(mejor["M"]),
-            "MG":  float(mejor["MG"]),
-            "MAB": float(mejor["MAB"]),
-            "MAA": float(mejor["MAA"]),
-            "MV":  float(mejor["MV"]),
-        },
-        "score_esperado": float(mejor["score_esperado"]),
-        "rango_evaluado": (float(precio_min), float(precio_max)),
+        "oferta_optima": precio,
+        "pct_mejora": pct,
+        "scores": {cod: float(mejor[cod]) for cod in FORMULAS_VALIDAS},
+        "score_esperado": float(mejor[columna] if columna != "score_esperado" else mejor["score_esperado"]),
+        "rango_evaluado": (float(tabla["precio"].iloc[0]), float(tabla["precio"].iloc[-1])),
         "tabla_simulacion": tabla,
     }

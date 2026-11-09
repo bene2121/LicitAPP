@@ -21,7 +21,7 @@ from m1_ingestor.db_schema import (
     ofertas as ofertas_table,
     sync_log,
 )
-from m1_ingestor.secop_client import SecopClient
+from m1_ingestor.secop_client import SecopClient, SecopRequestError
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -62,23 +62,29 @@ def _set_ultimo_sync(engine, tabla: str, ts: str) -> None:
 
 
 def _upsert_rows(engine, table, rows: list, pk_col: str) -> int:
-    """Inserta o actualiza filas usando INSERT OR REPLACE de SQLite."""
+    """Inserta o actualiza en lotes. SQLite limita las variables por sentencia."""
     if not rows:
         return 0
-    inserted = 0
+    unicos = {}
+    for row in rows:
+        pk = row.get(pk_col)
+        if pk:
+            unicos[pk] = row
+    filas = list(unicos.values())
+    if not filas:
+        return 0
+    columnas = [c.name for c in table.columns]
+    stmt = sqlite_insert(table)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[pk_col],
+        set_={c: stmt.excluded[c] for c in columnas if c != pk_col},
+    )
+    payload = [{c: row.get(c) for c in columnas} for row in filas]
+    lote = max(1, 900 // len(columnas))
     with engine.begin() as conn:
-        for row in rows:
-            stmt = (
-                sqlite_insert(table)
-                .values(**row)
-                .on_conflict_do_update(
-                    index_elements=[pk_col],
-                    set_={k: v for k, v in row.items() if k != pk_col},
-                )
-            )
-            conn.execute(stmt)
-            inserted += 1
-    return inserted
+        for i in range(0, len(payload), lote):
+            conn.execute(stmt, payload[i:i + lote])
+    return len(payload)
 
 
 def _now_iso() -> str:
@@ -157,7 +163,11 @@ def sync_procesos_s2(db_path: str = DB_PATH, filtros_config: Optional[dict] = No
     ) as progress:
         task = progress.add_task("Sincronizando SECOP II...", total=None)
 
-        registros = client.get_procesos_s2(filters=params, max_records=10_000)
+        try:
+            registros = client.get_procesos_s2(filters=params, max_records=10_000)
+        except SecopRequestError as exc:
+            console.print(f"[red]SECOP II no respondio:[/red] {exc}")
+            return 0
         progress.update(task, total=len(registros))
 
         rows = []
@@ -220,7 +230,11 @@ def sync_ofertas(db_path: str = DB_PATH, id_proceso: Optional[str] = None) -> in
             total=None,
         )
 
-        registros = client.get_ofertas(id_proceso=id_proceso)
+        try:
+            registros = client.get_ofertas(id_proceso=id_proceso)
+        except SecopRequestError as exc:
+            console.print(f"[red]Ofertas no respondieron:[/red] {exc}")
+            return 0
         progress.update(task, total=len(registros))
 
         rows = []
