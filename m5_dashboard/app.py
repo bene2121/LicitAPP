@@ -37,8 +37,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DB_PATH
 from m1_ingestor.entidades import ENTIDADES, es_entidad
 from m6_propuesta.armar import armar_propuesta
+from m7_competencia.historial_ofertas import estimar_ofertas
 from m7_competencia.investigar import investigar
 try:
+    from m2_formulas.comparar import diferencias_formulas
     from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
 except Exception:
@@ -555,10 +557,19 @@ with tab2:
             value=1000, step=50,
         )
     with col_inp3:
-        st.caption("El cálculo usa solo las ofertas reales que escribas abajo.")
+        st.caption("Las cinco fórmulas se calculan aparte y se comparan entre sí.")
+
+    st.markdown("**Competidores (NIT o nombre, uno por línea)**")
+    competidores_calc = st.text_area(
+        "Para estimar cómo han ofertado antes",
+        placeholder="900642880\nCONSORCIO VÍAS DEL SUR",
+        key="competidores_calc",
+        height=80,
+        label_visibility="collapsed",
+    )
 
     # Tabla de ofertas rivales
-    st.markdown("**Ofertas reales de rivales** *(al menos una)*")
+    st.markdown("**Ofertas de este proceso, si ya las conoces**")
     rivales_df_init = pd.DataFrame(
         [{"Rival": f"Rival {i+1}", "Precio (COP)": 0} for i in range(5)]
     )
@@ -586,151 +597,218 @@ with tab2:
     if st.button("⚡ Calcular las 5 Fórmulas", type="primary"):
         if not _HAS_ENGINE:
             st.error("Motor de fórmulas no disponible. Verifica la instalación del módulo m2_formulas.")
-        elif not ofertas_rivales_vals:
-            st.error("Ingresa al menos una oferta real de rival. No se inventan precios.")
         else:
-            formulas_info = {
-                "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
-                "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
-                "MAB": {"nombre": "Media Aritmética Baja", "riesgo": "Alto"},
-                "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
-                "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
-            }
-            try:
-                with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
-                    resultados_por_formula = optimizar_todas(
-                        presupuesto_oficial=float(po_calc),
-                        pts_max=float(pts_max_calc),
-                        ofertas_historicas=ofertas_rivales_vals,
-                    )
-            except ValueError as exc:
-                st.error(str(exc))
+            consultas_comp = [linea.strip() for linea in competidores_calc.splitlines() if linea.strip()]
+            guia_comp = None
+            if consultas_comp:
+                try:
+                    with st.spinner("Revisando ofertas anteriores de los competidores…"):
+                        guia_comp = estimar_ofertas(consultas_comp, float(po_calc))
+                except ValueError as exc_guia:
+                    st.error(str(exc_guia))
+            if guia_comp and guia_comp["competidores"]:
+                st.markdown("**Cómo han ofertado antes**")
+                st.dataframe(
+                    [{
+                        "Competidor": f["nombre"],
+                        "Ofertas": f["ofertas"],
+                        "Con presupuesto": f["con_presupuesto"],
+                        "Descuento mediano": (
+                            f"{f['descuento_mediano'] * 100:.1f} %"
+                            if f["descuento_mediano"] is not None and f["con_presupuesto"] else "—"
+                        ),
+                        "Rango": (
+                            f"{f['descuento_bajo'] * 100:.1f} % a {f['descuento_alto'] * 100:.1f} %"
+                            if f["con_presupuesto"] else "—"
+                        ),
+                        "Precio guía": fmt_cop(f["precio_guia"]) if f["precio_guia"] else "—",
+                        "Nota": f["nota"],
+                    } for f in guia_comp["competidores"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            precios_para_calculo = ofertas_rivales_vals or (guia_comp["precios_guia"] if guia_comp else [])
+            if not precios_para_calculo:
+                st.error(
+                    "Hace falta al menos una oferta de este proceso, "
+                    "o un competidor con ofertas anteriores que tengan presupuesto oficial."
+                )
                 resultados_por_formula = None
-
-            if resultados_por_formula:
-                st.markdown("---")
-                st.markdown("### Comparativa de las 5 Fórmulas")
-
-                # Tabla comparativa
-                tabla_rows = []
-                for cod, fi in formulas_info.items():
-                    r = resultados_por_formula[cod]
-                    precio = r["oferta_optima"]
-                    pct = r["pct_mejora"] * 100
-                    puntaje = r["scores"][cod]
-                    tabla_rows.append({
-                        "Fórmula": cod,
-                        "Nombre": fi["nombre"],
-                        "Precio Sugerido": precio,
-                        "% Mejora P.O.": pct,
-                        "Puntaje Esperado": puntaje,
-                        "/ Máx.": pts_max_calc,
-                        "Riesgo": fi["riesgo"],
-                    })
-
-                # Mostrar tabla con radio buttons
-                col_radio_sel = st.radio(
-                    "Seleccionar fórmula:",
-                    options=[r["Fórmula"] for r in tabla_rows],
-                    format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
-                    horizontal=True,
-                    key="formula_radio",
-                )
-
-                # Header tabla
-                th = st.columns([1, 2, 2, 1, 2, 1])
-                for c, h in zip(th, ["Fórmula", "Nombre", "Precio Sugerido", "% Mejora", "Puntaje", "Riesgo"]):
-                    c.markdown(f"**{h}**")
-                st.markdown("<hr style='margin:2px 0 6px 0'>", unsafe_allow_html=True)
-
-                for row in tabla_rows:
-                    riesgo_color = {"Alto": "#dc3545", "Medio": "#fd7e14", "Bajo": "#28a745"}.get(row["Riesgo"], "#333")
-                    sel = "✅" if row["Fórmula"] == col_radio_sel else "⭕"
-                    tc1, tc2, tc3, tc4, tc5, tc6 = st.columns([1, 2, 2, 1, 2, 1])
-                    tc1.markdown(f"**{sel} {row['Fórmula']}**")
-                    tc2.write(row["Nombre"])
-                    tc3.markdown(f"**{fmt_cop(row['Precio Sugerido'])}**")
-                    tc4.write(f"{row['% Mejora P.O.']:.1f}%")
-                    pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
-                    tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
-                    tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{row['Riesgo']}</span>", unsafe_allow_html=True)
-                    st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
-
-                # Campo "Mi precio final" editable
-                selected_precio = resultados_por_formula[col_radio_sel]["oferta_optima"]
-                st.markdown("---")
-                col_f1, col_f2 = st.columns([2, 1])
-                with col_f1:
-                    mi_precio_final = st.number_input(
-                        f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
-                        min_value=1_000_000, max_value=int(po_calc),
-                        value=int(selected_precio), step=100_000, format="%d",
-                        key="mi_precio_final",
-                    )
-                with col_f2:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("✅ Usar esta oferta", type="primary"):
-                        oferta_info = {
-                            "formula": col_radio_sel,
-                            "nombre_formula": formulas_info[col_radio_sel]["nombre"],
-                            "precio": mi_precio_final,
-                            "presupuesto_oficial": po_calc,
-                            "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
-                            "fecha": datetime.now().isoformat(),
-                            "proceso": (
-                                (proc_sel.get("id") or proc_sel.get("id_del_proceso", ""))
-                                if proc_sel else ""
-                            ),
-                        }
-                        st.session_state.oferta_guardada = oferta_info
-                        # Guardar en historial del perfil
-                        perfil = st.session_state.perfil
-                        perfil.setdefault("historial_ofertas", []).append(oferta_info)
-                        guardar_perfil(perfil)
-                        st.success(
-                            f"✅ Oferta guardada: **{fmt_cop(mi_precio_final)}** "
-                            f"con fórmula **{col_radio_sel}** ({formulas_info[col_radio_sel]['nombre']})"
-                        )
-
-                # Gráfico comparativo de puntajes
-                st.markdown("---")
-                st.markdown("### 📊 Comparativa de Puntajes por Fórmula")
-
-                fig_bar = go.Figure()
-                colores_formula = {
-                    "M": "#1F4E79", "MG": "#28a745", "MAB": "#fd7e14",
-                    "MAA": "#6f42c1", "MV": "#dc3545",
+            else:
+                formulas_info = {
+                    "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
+                    "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
+                    "MAB": {"nombre": "Media Aritmética Baja", "riesgo": "Alto"},
+                    "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
+                    "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
                 }
-                puntajes_lista = [resultados_por_formula[c]["scores"][c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
-                nombres_lista = [formulas_info[c]["nombre"] for c in ["M", "MG", "MAB", "MAA", "MV"]]
-                colores_lista = [colores_formula[c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                try:
+                    with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
+                        resultados_por_formula = optimizar_todas(
+                            presupuesto_oficial=float(po_calc),
+                            pts_max=float(pts_max_calc),
+                            ofertas_historicas=precios_para_calculo,
+                        )
+                        if not ofertas_rivales_vals:
+                            st.caption(
+                                "Las cinco fórmulas usan los precios guía de ofertas anteriores, "
+                                "no ofertas presentadas en este proceso."
+                            )
+                except ValueError as exc:
+                    st.error(str(exc))
+                    resultados_por_formula = None
 
-                fig_bar.add_trace(go.Bar(
-                    y=nombres_lista,
-                    x=puntajes_lista,
-                    orientation="h",
-                    marker_color=colores_lista,
-                    text=[f"{p:.0f}" for p in puntajes_lista],
-                    textposition="outside",
-                ))
-                fig_bar.update_layout(
-                    xaxis_title="Puntaje", xaxis_range=[0, pts_max_calc * 1.1],
-                    height=320, margin=dict(l=10, r=40, t=20, b=20),
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                if resultados_por_formula:
+                    st.markdown("---")
+                    st.markdown("### Comparativa de las 5 Fórmulas")
 
-                # Explicación de fórmulas
-                with st.expander("ℹ️ ¿Cuándo se usa cada fórmula en Colombia?"):
-                    st.markdown("""
-| Fórmula | Cuándo se usa |
-|---------|---------------|
-| **M — Mediana** | Licitaciones con múltiples oferentes; penaliza valores extremos. Equilibrada. |
-| **MG — Media Geométrica** | Similar a la Mediana; favorece precios competitivos pero no extremos. |
-| **MAB — M.A. Baja** | Usada cuando la entidad quiere incentivar precios bajos. Mayor riesgo de dumping. |
-| **MAA — M.A. Alta** | Penaliza fuertemente a quien oferte por encima de la media alta. Favorece calidad. |
-| **MV — Menor Valor** | El precio más bajo obtiene el máximo puntaje. Alto riesgo: requiere solidez financiera. |
-""")
+                    # Tabla comparativa
+                    tabla_rows = []
+                    for cod, fi in formulas_info.items():
+                        r = resultados_por_formula[cod]
+                        precio = r["oferta_optima"]
+                        pct = r["pct_mejora"] * 100
+                        puntaje = r["scores"][cod]
+                        tabla_rows.append({
+                            "Fórmula": cod,
+                            "Nombre": fi["nombre"],
+                            "Precio Sugerido": precio,
+                            "% Mejora P.O.": pct,
+                            "Puntaje Esperado": puntaje,
+                            "/ Máx.": pts_max_calc,
+                            "Riesgo": fi["riesgo"],
+                        })
+
+                    # Mostrar tabla con radio buttons
+                    col_radio_sel = st.radio(
+                        "Seleccionar fórmula:",
+                        options=[r["Fórmula"] for r in tabla_rows],
+                        format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
+                        horizontal=True,
+                        key="formula_radio",
+                    )
+
+                    # Header tabla
+                    th = st.columns([1, 2, 2, 1, 2, 1])
+                    for c, h in zip(th, ["Fórmula", "Nombre", "Precio Sugerido", "% Mejora", "Puntaje", "Riesgo"]):
+                        c.markdown(f"**{h}**")
+                    st.markdown("<hr style='margin:2px 0 6px 0'>", unsafe_allow_html=True)
+
+                    for row in tabla_rows:
+                        riesgo_color = {"Alto": "#dc3545", "Medio": "#fd7e14", "Bajo": "#28a745"}.get(row["Riesgo"], "#333")
+                        sel = "✅" if row["Fórmula"] == col_radio_sel else "⭕"
+                        tc1, tc2, tc3, tc4, tc5, tc6 = st.columns([1, 2, 2, 1, 2, 1])
+                        tc1.markdown(f"**{sel} {row['Fórmula']}**")
+                        tc2.write(row["Nombre"])
+                        tc3.markdown(f"**{fmt_cop(row['Precio Sugerido'])}**")
+                        tc4.write(f"{row['% Mejora P.O.']:.1f}%")
+                        pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
+                        tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
+                        tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{row['Riesgo']}</span>", unsafe_allow_html=True)
+                        st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
+
+                    diffs = diferencias_formulas(resultados_por_formula)
+                    st.markdown("### Cada fórmula, por separado")
+                    pestanas = st.tabs([f"{f['formula']} — {formulas_info[f['formula']]['nombre']}" for f in diffs])
+                    for pestana, fila in zip(pestanas, diffs):
+                        with pestana:
+                            d1, d2, d3 = st.columns(3)
+                            d1.metric("Precio sugerido", fmt_cop(fila["precio"]))
+                            d2.metric("Puntaje", f"{fila['puntaje']:.1f}")
+                            d3.metric("Bajo el presupuesto", f"{fila['pct_mejora'] * 100:.1f} %")
+                            st.write(
+                                f"Frente a la fórmula más baja: **{fmt_cop(fila['dif_vs_mas_baja'])}**. "
+                                f"Frente a menor valor: **{fmt_cop(fila['dif_vs_mv'])}**. "
+                                f"Frente al promedio de las cinco: **{fmt_cop(fila['dif_vs_promedio'])}**."
+                            )
+                    st.markdown("**Diferencias de precio entre las cinco**")
+                    st.dataframe(
+                        [{
+                            "Fórmula": f["formula"],
+                            "Precio": fmt_cop(f["precio"]),
+                            "Vs. la más baja": fmt_cop(f["dif_vs_mas_baja"]),
+                            "Vs. menor valor": fmt_cop(f["dif_vs_mv"]),
+                            "Vs. promedio": fmt_cop(f["dif_vs_promedio"]),
+                        } for f in diffs],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    # Campo "Mi precio final" editable
+                    selected_precio = resultados_por_formula[col_radio_sel]["oferta_optima"]
+                    st.markdown("---")
+                    col_f1, col_f2 = st.columns([2, 1])
+                    with col_f1:
+                        mi_precio_final = st.number_input(
+                            f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
+                            min_value=1_000_000, max_value=int(po_calc),
+                            value=int(selected_precio), step=100_000, format="%d",
+                            key="mi_precio_final",
+                        )
+                    with col_f2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("✅ Usar esta oferta", type="primary"):
+                            oferta_info = {
+                                "formula": col_radio_sel,
+                                "nombre_formula": formulas_info[col_radio_sel]["nombre"],
+                                "precio": mi_precio_final,
+                                "presupuesto_oficial": po_calc,
+                                "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
+                                "fecha": datetime.now().isoformat(),
+                                "proceso": (
+                                    (proc_sel.get("id") or proc_sel.get("id_del_proceso", ""))
+                                    if proc_sel else ""
+                                ),
+                            }
+                            st.session_state.oferta_guardada = oferta_info
+                            # Guardar en historial del perfil
+                            perfil = st.session_state.perfil
+                            perfil.setdefault("historial_ofertas", []).append(oferta_info)
+                            guardar_perfil(perfil)
+                            st.success(
+                                f"✅ Oferta guardada: **{fmt_cop(mi_precio_final)}** "
+                                f"con fórmula **{col_radio_sel}** ({formulas_info[col_radio_sel]['nombre']})"
+                            )
+
+                    # Gráfico comparativo de puntajes
+                    st.markdown("---")
+                    st.markdown("### 📊 Comparativa de Puntajes por Fórmula")
+
+                    fig_bar = go.Figure()
+                    colores_formula = {
+                        "M": "#1F4E79", "MG": "#28a745", "MAB": "#fd7e14",
+                        "MAA": "#6f42c1", "MV": "#dc3545",
+                    }
+                    puntajes_lista = [resultados_por_formula[c]["scores"][c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                    nombres_lista = [formulas_info[c]["nombre"] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                    colores_lista = [colores_formula[c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+
+                    fig_bar.add_trace(go.Bar(
+                        y=nombres_lista,
+                        x=puntajes_lista,
+                        orientation="h",
+                        marker_color=colores_lista,
+                        text=[f"{p:.0f}" for p in puntajes_lista],
+                        textposition="outside",
+                    ))
+                    fig_bar.update_layout(
+                        xaxis_title="Puntaje", xaxis_range=[0, pts_max_calc * 1.1],
+                        height=320, margin=dict(l=10, r=40, t=20, b=20),
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # Explicación de fórmulas
+                    with st.expander("ℹ️ ¿Cuándo se usa cada fórmula en Colombia?"):
+                        st.markdown("""
+    | Fórmula | Cuándo se usa |
+    |---------|---------------|
+    | **M — Mediana** | Licitaciones con múltiples oferentes; penaliza valores extremos. Equilibrada. |
+    | **MG — Media Geométrica** | Similar a la Mediana; favorece precios competitivos pero no extremos. |
+    | **MAB — M.A. Baja** | Usada cuando la entidad quiere incentivar precios bajos. Mayor riesgo de dumping. |
+    | **MAA — M.A. Alta** | Penaliza fuertemente a quien oferte por encima de la media alta. Favorece calidad. |
+    | **MV — Menor Valor** | El precio más bajo obtiene el máximo puntaje. Alto riesgo: requiere solidez financiera. |
+    """)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
