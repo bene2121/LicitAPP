@@ -36,6 +36,8 @@ procesos_s2 = Table(
     Column("fecha_modificacion", Text),
     Column("lotes", Integer, default=0),
     Column("fecha_descarga", Text),
+    Column("nit_entidad", Text),
+    Column("canal_oferta", Text),
 )
 
 procesos_s1 = Table(
@@ -97,8 +99,20 @@ def init_db(db_path: str = DB_PATH):
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     engine = create_engine(f"sqlite:///{db_path}")
     metadata.create_all(engine)
+    _agregar_columnas(engine)
     print(f"[db_schema] Base de datos inicializada en: {db_path}")
     return engine
+
+
+def _agregar_columnas(engine):
+    """SQLite no altera tablas viejas con create_all."""
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        existentes = {fila[1] for fila in conn.execute(text("PRAGMA table_info(procesos_s2)"))}
+        if "nit_entidad" not in existentes:
+            conn.execute(text("ALTER TABLE procesos_s2 ADD COLUMN nit_entidad TEXT"))
+        if "canal_oferta" not in existentes:
+            conn.execute(text("ALTER TABLE procesos_s2 ADD COLUMN canal_oferta TEXT"))
 
 
 if __name__ == "__main__":

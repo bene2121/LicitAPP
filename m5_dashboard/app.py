@@ -35,6 +35,7 @@ except ImportError as _imp_err:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
+from m1_ingestor.entidades import ENTIDADES, es_entidad
 try:
     from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
@@ -312,8 +313,12 @@ with tab1:
             "Estado", ESTADOS, key="estado_sel_adv",
             default=["Presentación de oferta", "Fase de ofertas"] if usar_perfil else [],
         )
-        fuente_sel = st.radio("Fuente SECOP", ["Ambas", "SECOP I", "SECOP II"],
-                              horizontal=True, key="fuente_sel_adv")
+        fuente_sel = st.radio(
+            "Fuente",
+            ["Ambas", "SECOP II", "Ecopetrol", "Findeter"],
+            horizontal=True,
+            key="fuente_sel_adv",
+        )
         entidad_txt = st.text_input("Entidad contratante", placeholder="IDU, Gobernación...",
                                     key="ent_txt_adv")
 
@@ -334,7 +339,8 @@ with tab1:
         filtros_api["departamento"] = deptos_sel[0] if len(deptos_sel) == 1 else None
     if municipio_txt:
         filtros_api["municipio"] = municipio_txt
-    if unspsc_codes:
+    fuente_especial = fuente_sel in ("Ecopetrol", "Findeter")
+    if unspsc_codes and not fuente_especial:
         fams  = [c for c in unspsc_codes if len(c) == 2]
         clases = [c for c in unspsc_codes if len(c) == 4]
         if fams:   filtros_api["unspsc_familia"] = fams[0]
@@ -343,15 +349,20 @@ with tab1:
         filtros_api["modalidad"] = modal_sel[0]
     if estado_sel:
         filtros_api["estado"] = ",".join(estado_sel)
-    if fuente_sel != "Ambas":
-        filtros_api["fuente"] = "SECOP1" if fuente_sel == "SECOP I" else "SECOP2"
+    if fuente_sel == "Ecopetrol":
+        filtros_api["entidad"] = "EMPRESA COLOMBIANA DE PETROLEOS"
+    elif fuente_sel == "Findeter":
+        filtros_api["entidad"] = "FINANCIERA DE DESARROLLO TERRITORIAL"
+    elif fuente_sel == "SECOP II":
+        filtros_api["fuente"] = "SECOP2"
     if texto_busq:
         filtros_api["q"] = texto_busq
     if entidad_txt:
         filtros_api["entidad"] = entidad_txt
     filtros_api["po_min"]         = rango_ppto[0]
     filtros_api["po_max"]         = rango_ppto[1]
-    filtros_api["score_min"]      = float(score_min_f)
+    if not fuente_especial:
+        filtros_api["score_min"] = float(score_min_f)
     filtros_api["dias_cierre_max"] = dias_max
 
     # Eliminar claves con valor None
@@ -359,10 +370,14 @@ with tab1:
 
     procesos_todos, origen = cargar_procesos_api(filtros_api)
 
+    if fuente_especial:
+        codigo_fuente = "ECOPETROL" if fuente_sel == "Ecopetrol" else "FINDETER"
+        st.info(ENTIDADES[codigo_fuente]["canal_oferta"])
+
     if origen == "vacio":
         st.info(
             "No hay procesos reales cargados. "
-            "Ejecuta `python m1_ingestor/ingestor.py` para sincronizar SECOP.",
+            "Ejecuta `python m1_ingestor/ingestor.py` para sincronizar SECOP, Ecopetrol y Findeter.",
             icon="ℹ️",
         )
 
@@ -376,8 +391,12 @@ with tab1:
             )
             if _normalizar(texto_busq) not in haystack:
                 continue
-        # departamento
-        if deptos_sel and _departamento(p.get("departamento") or p.get("departamento_entidad")) not in [_departamento(d) for d in deptos_sel]:
+        if (
+            not fuente_especial
+            and deptos_sel
+            and _departamento(p.get("departamento") or p.get("departamento_entidad"))
+            not in [_departamento(d) for d in deptos_sel]
+        ):
             continue
         # modalidad
         if modal_sel:
@@ -395,14 +414,17 @@ with tab1:
         d = p.get("dias_al_cierre")
         if d is not None and d > dias_max:
             continue
-        # score mínimo
-        if p.get("score", 0) < score_min_f:
-            continue
-        # unspsc codes selected
-        if unspsc_codes:
+        if unspsc_codes and not fuente_especial:
             p_unspsc = str(p.get("unspsc", ""))
             if not any(p_unspsc.startswith(c) for c in unspsc_codes):
                 continue
+        if not fuente_especial and p.get("score", 0) < score_min_f:
+            continue
+        if fuente_especial and not es_entidad(
+            {"nit_entidad": p.get("nit_entidad"), "entidad": p.get("entidad")},
+            "ECOPETROL" if fuente_sel == "Ecopetrol" else "FINDETER",
+        ):
+            continue
         filtrados.append(p)
 
     # ── Métricas superiores ───────────────────────────────────────────────────

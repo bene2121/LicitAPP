@@ -28,6 +28,7 @@ from m1_ingestor.campos import (
     where_oferta,
     where_procesos_s2,
 )
+from m1_ingestor.entidades import ENTIDADES, where_entidad
 from m1_ingestor.secop_client import SecopClient, SecopRequestError
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,33 @@ def sync_ofertas(db_path: str = DB_PATH, id_proceso: Optional[str] = None) -> in
     return total
 
 
+def sync_entidad(codigo: str, db_path: str = DB_PATH, max_records: int = 300) -> int:
+    """Descarga procesos abiertos de Ecopetrol o Findeter, sin el filtro de obra civil."""
+    ficha = ENTIDADES[codigo]
+    engine = _get_engine(db_path)
+    init_db(db_path)
+    client = SecopClient()
+    ahora = _now_iso()
+    params = {
+        "$where": where_entidad(ficha["nit"]),
+        "$order": "fecha_de_ultima_publicaci DESC",
+    }
+    try:
+        registros = client.get_procesos_s2(filters=params, max_records=max_records)
+    except SecopRequestError as exc:
+        console.print(f"[red]{ficha['nombre']} no respondio:[/red] {exc}")
+        return 0
+    rows = []
+    for registro in registros:
+        fila = fila_proceso_s2(registro, ahora, canal_oferta=ficha["canal_oferta"])
+        if fila:
+            rows.append(fila)
+    total = _upsert_rows(engine, procesos_s2, rows, "id_del_proceso")
+    _set_ultimo_sync(engine, f"entidad_{codigo.lower()}", ahora)
+    console.print(f"[green]{ficha['nombre']}:[/green] {total} procesos.")
+    return total
+
+
 def run_full_sync(db_path: str = DB_PATH, config=None) -> dict:
     """Ejecuta la sincronizacion completa: SECOP II + ofertas.
 
@@ -240,8 +268,15 @@ def run_full_sync(db_path: str = DB_PATH, config=None) -> dict:
 
     n_s2 = sync_procesos_s2(db_path=db_path, filtros_config=filtros)
     n_ofertas = sync_ofertas(db_path=db_path)
+    n_ecopetrol = sync_entidad("ECOPETROL", db_path=db_path)
+    n_findeter = sync_entidad("FINDETER", db_path=db_path)
 
-    resumen = {"s2": n_s2, "ofertas": n_ofertas}
+    resumen = {
+        "s2": n_s2,
+        "ofertas": n_ofertas,
+        "ecopetrol": n_ecopetrol,
+        "findeter": n_findeter,
+    }
     console.rule("[bold blue]Sincronizacion completada")
     console.print(resumen)
     return resumen
