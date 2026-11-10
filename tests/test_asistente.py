@@ -146,6 +146,49 @@ def test_explorador_en_vivo_y_guardar(tmp_path):
     assert "VIVO_OK" in salida.stdout, salida.stdout[-2000:] + salida.stderr[-3000:]
 
 
+def test_explorador_reacciona_a_filtros_y_limpiar_restablece_todo(tmp_path):
+    script = textwrap.dedent(f"""
+        import sys; sys.path.insert(0, {str(RAIZ)!r})
+        from datetime import date, timedelta
+        from streamlit.testing.v1 import AppTest
+        def fila(i, depto, modalidad, unspsc):
+            return {{
+                'id_del_portafolio': f'CO1.BDOS.{{i}}', 'id_del_proceso': f'CO1.REQ.{{i}}',
+                'referencia_del_proceso': f'REF-{{i}}', 'entidad': f'ENTIDAD {{depto}}', 'nit_entidad': str(i),
+                'nombre_del_procedimiento': f'PROCESO {{i}}', 'modalidad_de_contratacion': modalidad,
+                'estado_del_procedimiento': 'Presentación de oferta', 'fase': 'Presentación de oferta',
+                'precio_base': '100000000',
+                'fecha_de_recepcion_de': (date.today()+timedelta(days=20)).isoformat()+'T00:00:00.000',
+                'codigo_principal_de_categoria': 'V1.'+unspsc, 'departamento_entidad': depto,
+                'ciudad_de_la_unidad_de': 'CAPITAL', 'urlproceso': {{'url':'https://example.test'}},
+            }}
+        filas = [fila(1,'Sucre','Licitación Pública','72101500'),
+                 fila(2,'Atlántico','Mínima Cuantía','44100000'),
+                 fila(3,'Sucre','Mínima Cuantía','44100000')]
+        consultas=[]
+        def cliente(url, params): consultas.append(params.get('$where','')); return filas
+        at=AppTest.from_file({str(RAIZ / 'm5_dashboard' / 'app.py')!r}, default_timeout=180)
+        at.session_state['_cliente_secop_pruebas']=cliente; at.run(); assert not at.exception, at.exception
+        def metrica(): return next(m for m in at.metric if m.label=='Procesos encontrados').value
+        assert metrica()=='3', metrica()
+        next(w for w in at.multiselect if w.key=='deptos_sel_adv').set_value(['SUCRE']).run()
+        next(w for w in at.multiselect if w.key=='unspsc_sel_adv').set_value(['72 — Obras civiles y construcción']).run()
+        next(w for w in at.multiselect if w.key=='modal_sel_adv').set_value(['Licitación Pública']).run()
+        assert not at.exception, at.exception
+        assert metrica()=='1', [(m.label,m.value) for m in at.metric]
+        assert 'SUCRE' in consultas[-1].upper() and 'V1.72%' in consultas[-1] and 'LICIT' in consultas[-1].upper()
+        next(b for b in at.button if b.key=='btn_limpiar').click().run()
+        assert not at.exception, at.exception
+        assert metrica()=='3', [(m.label,m.value) for m in at.metric]
+        assert at.session_state.deptos_sel_adv==[] and at.session_state.unspsc_sel_adv==[]
+        assert at.session_state.modal_sel_adv==[] and at.session_state.usar_perfil_tog is False
+        print('FILTROS_REACTIVOS_OK')
+    """)
+    env = dict(os.environ, LICITAPP_DATA_DIR=str(tmp_path / "data"), LICITAPP_EXPEDIENTES=str(tmp_path / "exp"))
+    salida = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=600)
+    assert "FILTROS_REACTIVOS_OK" in salida.stdout, salida.stdout[-3000:] + salida.stderr[-3000:]
+
+
 def test_where_vivo_filtra_departamento_modalidad_y_sector_en_secop():
     from datetime import date
     from m1_ingestor.vivo import where_vivo

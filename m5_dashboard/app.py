@@ -278,6 +278,26 @@ def _secop_vivo(filtros: tuple):
     return buscar_en_vivo(datos, cliente), datetime.now().strftime("%H:%M")
 
 
+def _actualizar_explorador():
+    """Fuerza una consulta nueva aunque los filtros coincidan con una ejecución anterior."""
+    st.session_state["explorador_revision"] = int(st.session_state.get("explorador_revision", 0)) + 1
+    _secop_vivo.clear()
+
+
+def _limpiar_filtros_explorador():
+    """Restablece valores explícitos para que el perfil no los repueble al rerun."""
+    valores = {
+        "usar_perfil_tog": False,
+        "deptos_sel_adv": [], "modal_sel_adv": [], "estado_sel_adv": [], "unspsc_sel_adv": [],
+        "mun_txt_adv": "", "ent_txt_adv": "", "texto_busq_adv": "",
+        "dias_max_adv": 90, "score_min_adv": 0, "fuente_sel_adv": "Ambas",
+        "rango_ppto": (0, 2_000_000_000),
+    }
+    for clave, valor in valores.items():
+        st.session_state[clave] = valor
+    _actualizar_explorador()
+
+
 def guardar_perfil(perfil):
     """Guarda el perfil SIN contraseñas.
 
@@ -358,14 +378,10 @@ with tab1:
     with st.sidebar:
         st.markdown("## 🔍 Filtros")
         perfil_filtros = st.session_state.perfil
-        usar_perfil = st.toggle("Aplicar filtros de mi perfil", value=True, key="usar_perfil_tog")
-        if st.button("🗑️ Limpiar todos los filtros", key="btn_limpiar"):
-            for k in ["deptos_sel_adv","modal_sel_adv","estado_sel_adv","unspsc_sel_adv",
-                      "mun_txt_adv","ent_txt_adv","texto_busq_adv","dias_max_adv",
-                      "score_min_adv","fuente_sel_adv"]:
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.rerun()
+        usar_perfil = st.toggle("Aplicar filtros de mi perfil", value=False, key="usar_perfil_tog",
+                                help="Actívalo únicamente si deseas cargar los filtros guardados en Mi cuenta.")
+        st.button("🗑️ Limpiar todos los filtros", key="btn_limpiar",
+                  on_click=_limpiar_filtros_explorador)
 
         texto_busq = st.text_input("🔍 Buscar objeto / entidad / ID",
                                    placeholder="pavimentación, IDU, CO1.BDOS...",
@@ -458,9 +474,7 @@ with tab1:
         procesos_todos, origen = list(_guardados), "guardados"
     else:
         _b1, _b2 = st.columns([1, 3])
-        if _b1.button("🔄 Actualizar ahora", key="btn_actualizar_vivo"):
-            _secop_vivo.clear()
-            st.rerun()
+        _b1.button("🔄 Actualizar ahora", key="btn_actualizar_vivo", on_click=_actualizar_explorador)
         if fuente_sel == "Ecopetrol":
             filtros_api["nit_entidad"] = ENTIDADES["ECOPETROL"]["nit"]
             filtros_api.pop("entidad", None)
@@ -475,9 +489,11 @@ with tab1:
                     _clave["departamentos"] = tuple(deptos_sel)
                     _clave["unspsc"] = tuple(unspsc_codes)
                 _clave["modalidades"] = tuple(modal_sel)
+                _clave["revision"] = int(st.session_state.get("explorador_revision", 0))
                 procesos_todos, _hora = _secop_vivo(tuple(sorted(_clave.items())))
             origen = "vivo"
-            _b2.caption(f"Datos en vivo de SECOP II · consultado {_hora}")
+            _b2.caption(f"Datos en vivo de SECOP II · consultado {_hora} · "
+                        f"SECOP devolvió {len(procesos_todos)} procesos para esta consulta")
         except Exception as _exc_vivo:
             procesos_todos, origen = cargar_procesos()
             st.warning(f"No se pudo consultar SECOP II ahora ({type(_exc_vivo).__name__}). "
