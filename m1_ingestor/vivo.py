@@ -67,6 +67,13 @@ def where_vivo(filtros: dict, hoy: date | None = None) -> str:
     entidad = " ".join(str(filtros.get("entidad") or "").split())[:120]
     if entidad:
         partes.append("(" + " OR ".join(f"upper(entidad) like '%{v}%'" for v in _texto_like(entidad)) + ")")
+    municipio = " ".join(str(filtros.get("municipio") or "").split())[:120]
+    if municipio:
+        opciones = []
+        for v in _texto_like(municipio):
+            opciones.append(f"upper(ciudad_de_la_unidad_de) like '%{v}%'")
+            opciones.append(f"upper(ciudad_entidad) like '%{v}%'")
+        partes.append("(" + " OR ".join(opciones) + ")")
     if filtros.get("nit_entidad"):
         partes.append(f"nit_entidad = '{soql_literal(str(filtros['nit_entidad']))}'")
     return " AND ".join(partes)

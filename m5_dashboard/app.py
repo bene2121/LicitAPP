@@ -399,7 +399,7 @@ with tab1:
             horizontal=True,
             key="fuente_sel_adv",
         )
-        entidad_txt = st.text_input("Entidad contratante", placeholder="IDU, Gobernación...",
+        entidad_txt = st.text_input("Entidad contratante (nombre o sigla)", placeholder="Aerocivil, IDU, Gobernación...",
                                     key="ent_txt_adv")
 
         st.markdown("**💰 Presupuesto Oficial**")
@@ -460,6 +460,7 @@ with tab1:
         _b1, _b2 = st.columns([1, 3])
         if _b1.button("🔄 Actualizar ahora", key="btn_actualizar_vivo"):
             _secop_vivo.clear()
+            st.rerun()
         if fuente_sel == "Ecopetrol":
             filtros_api["nit_entidad"] = ENTIDADES["ECOPETROL"]["nit"]
             filtros_api.pop("entidad", None)
@@ -469,7 +470,7 @@ with tab1:
         try:
             with st.spinner("Consultando SECOP II en vivo…"):
                 _clave = {k: v for k, v in filtros_api.items()
-                          if k in ("q", "entidad", "nit_entidad", "po_min", "po_max", "dias_cierre_max")}
+                          if k in ("q", "entidad", "municipio", "nit_entidad", "po_min", "po_max", "dias_cierre_max")}
                 if not fuente_especial:
                     _clave["departamentos"] = tuple(deptos_sel)
                     _clave["unspsc"] = tuple(unspsc_codes)
@@ -495,7 +496,7 @@ with tab1:
 
     # ── Filtrar ───────────────────────────────────────────────────────────────
     filtrados = []
-    for p in (procesos_todos if not _ver_guardados else []):
+    for p in procesos_todos:
         # texto
         if texto_busq:
             haystack = _normalizar(
@@ -510,6 +511,12 @@ with tab1:
             and _departamento(p.get("departamento") or p.get("departamento_entidad"))
             not in [_departamento(d) for d in deptos_sel]
         ):
+            continue
+        if municipio_txt:
+            p_municipio = _normalizar(p.get("ciudad_unidad") or p.get("municipio") or p.get("ciudad_entidad") or "")
+            if _normalizar(municipio_txt) not in p_municipio:
+                continue
+        if entidad_txt and _normalizar(entidad_txt) not in _normalizar(p.get("entidad", "")):
             continue
         # modalidad
         if modal_sel:
@@ -540,10 +547,17 @@ with tab1:
             continue
         filtrados.append(p)
 
-    if _ver_guardados:
-        filtrados = list(procesos_todos)
-        if not filtrados:
-            st.info("Todavía no has guardado procesos. En **En SECOP II ahora** pulsa ⭐ Guardar en los que quieras revisar después.")
+    if _ver_guardados and not procesos_todos:
+        st.info("Todavía no has guardado procesos. En **En SECOP II ahora** pulsa ⭐ Guardar en los que quieras revisar después.")
+
+    _filtros_visibles = []
+    if deptos_sel: _filtros_visibles.append("Departamento: " + ", ".join(deptos_sel))
+    if municipio_txt: _filtros_visibles.append("Municipio: " + municipio_txt)
+    if entidad_txt: _filtros_visibles.append("Entidad: " + entidad_txt)
+    if modal_sel: _filtros_visibles.append("Modalidad: " + ", ".join(modal_sel))
+    if unspsc_codes: _filtros_visibles.append("UNSPSC: " + ", ".join(unspsc_codes))
+    if _filtros_visibles:
+        st.info("Filtros activos · " + " · ".join(_filtros_visibles))
 
     # ── Métricas superiores ───────────────────────────────────────────────────
     total_po = sum(float(p.get("presupuesto_oficial", 0) or 0) for p in filtrados)
@@ -655,7 +669,9 @@ with tab1:
                     "Calcula el precio en **🧮 CALCULADORA** y ármala en **📄 PROPUESTA**."
                 )
 
-            with st.expander(f"🔎 Ver detalle y competencia · {row['_id']}", expanded=False):
+            _analisis_key = f"analisis_explorador_{row['_id']}"
+            with st.expander(f"🔎 Ver detalle y competencia · {row['_id']}",
+                             expanded=_analisis_key in st.session_state):
                 _objeto_completo = _proceso_fila.get("objeto") or _proceso_fila.get("titulo") or "Sin descripción publicada"
                 st.markdown(f"**Objeto completo:** {esc_html(_objeto_completo)}")
                 dc1, dc2, dc3, dc4 = st.columns(4)
@@ -668,7 +684,6 @@ with tab1:
                 if _proceso_fila.get("url_proceso"):
                     st.link_button("Abrir expediente completo y documentos en SECOP II", _proceso_fila["url_proceso"],
                                    key=f"link_detalle_{i}_{row['_id']}")
-                _analisis_key = f"analisis_explorador_{row['_id']}"
                 if st.button("Analizar entidad, modalidad y sector — últimos 2 años",
                              key=f"btn_analizar_ent_{i}_{row['_id']}"):
                     from m7_competencia.entidad import analizar_entidad
@@ -678,6 +693,7 @@ with tab1:
                             st.session_state[_analisis_key] = analizar_entidad(
                                 _proceso_fila, st.session_state.get("_cliente_secop_pruebas") or _cliente_publico,
                                 anos=2, filtrar_contexto=True)
+                        st.toast("Análisis de competencia terminado")
                     except Exception as _exc_hist:
                         st.error(f"No fue posible completar el análisis: {_exc_hist}")
                 _hist = st.session_state.get(_analisis_key)
@@ -847,20 +863,46 @@ with tab2:
                     "presupuesto): " + ", ".join(fmt_cop(v) for v in _atipicas)
                     + ". Marca **Incluir ofertas atípicas** si quieres usarlas."
                 )
+            formulas_info = {
+                "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
+                "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
+                "MAB": {"nombre": "Media Aritmética Baja", "riesgo": "Alto"},
+                "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
+                "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
+            }
             if not precios_para_calculo:
-                st.error(
-                    "Hace falta al menos una oferta de este proceso, "
-                    "o un competidor con ofertas anteriores que tengan presupuesto oficial."
+                st.warning(
+                    "No hay precios de competidores. Sin esos valores las fórmulas M, MG, MAB y MAA no producen "
+                    "un precio óptimo distinto: dependen de las ofertas que finalmente presente el mercado. "
+                    "Aun así puedes preparar y guardar tu oferta con tu presupuesto sostenible."
                 )
                 resultados_por_formula = None
+                _precio_sostenible = st.number_input(
+                    "Precio calculado con tus costos, AIU, impuestos y utilidad (COP)", min_value=1_000_000,
+                    max_value=max(int(po_calc), 1_000_000), value=max(int(po_calc), 1_000_000), step=100_000,
+                    key="precio_sin_competidores")
+                _formula_sin_datos = st.selectbox(
+                    "Fórmula indicada en el pliego",
+                    list(formulas_info), format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
+                    key="formula_sin_competidores")
+                st.dataframe([{
+                    "Fórmula": cod, "Nombre": info["nombre"], "Precio de trabajo": fmt_cop(_precio_sostenible),
+                    "Interpretación": ("Menor valor favorece el precio válido más bajo, sujeto a costos."
+                                       if cod == "MV" else "No se puede optimizar sin conocer las demás ofertas."),
+                } for cod, info in formulas_info.items()], hide_index=True, width="stretch")
+                if st.button("✅ Usar esta oferta sin precios rivales", type="primary", key="usar_sin_competidores"):
+                    oferta_info = {
+                        "formula": _formula_sin_datos, "nombre_formula": formulas_info[_formula_sin_datos]["nombre"],
+                        "precio": float(_precio_sostenible), "presupuesto_oficial": float(po_calc),
+                        "pct_mejora": (float(po_calc) - float(_precio_sostenible)) / float(po_calc) if po_calc else 0,
+                        "fuente": "costos propios; sin precios de competidores",
+                    }
+                    st.session_state.oferta_guardada = oferta_info
+                    perfil_calc = st.session_state.perfil
+                    perfil_calc.setdefault("historial_ofertas", []).append(oferta_info)
+                    guardar_perfil(perfil_calc)
+                    st.success("Oferta guardada. Las fórmulas se recalcularán si después agregas precios reales.")
             else:
-                formulas_info = {
-                    "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
-                    "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
-                    "MAB": {"nombre": "Media Aritmética Baja", "riesgo": "Alto"},
-                    "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
-                    "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
-                }
                 try:
                     with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
                         resultados_por_formula = _optimizar_cache(

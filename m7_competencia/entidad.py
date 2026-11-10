@@ -50,7 +50,7 @@ def analizar_entidad(proceso: dict, cliente=None, hoy: date | None = None, anos:
             partes.append(f"codigo_principal_de_categoria like 'V1.{soql_literal(unspsc)}%'")
         procesos_contexto = cliente(API_PROCESOS, {
             "$select": "id_del_portafolio,referencia_del_proceso,precio_base,nombre_del_procedimiento",
-            "$where": " AND ".join(partes), "$order": "fecha_de_publicacion_del DESC", "$limit": "500",
+            "$where": " AND ".join(partes), "$order": "fecha_de_publicacion_del DESC", "$limit": "200",
         }) or []
         ids = [str(f.get("id_del_portafolio") or "") for f in procesos_contexto if f.get("id_del_portafolio")]
         presupuestos = {str(f.get("id_del_portafolio")): _numero(f.get("precio_base")) for f in procesos_contexto}

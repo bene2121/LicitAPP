@@ -334,13 +334,18 @@ def test_calculadora_deja_fuera_ofertas_atipicas(entorno):
     assert "Se dejaron fuera" not in _textos(at)
 
 
-def test_calculadora_sin_rivales_pide_datos_reales(entorno):
+def test_calculadora_sin_rivales_permite_precio_de_costos(entorno):
     at = _preparar_oferta(_app())
     _boton(at, "Calcular las 5").click()
     at = at.run()
     _sin_excepciones(at)
-    assert "al menos una oferta" in _textos(at)
+    assert "No hay precios de competidores" in _textos(at)
+    assert any((b.key or "") == "usar_sin_competidores" for b in at.button)
     assert at.session_state["oferta_guardada"] is None
+    at.button(key="usar_sin_competidores").click()
+    at = at.run()
+    _sin_excepciones(at)
+    assert at.session_state["oferta_guardada"]["fuente"] == "costos propios; sin precios de competidores"
 
 
 # ── 3. Documentos, consorcios, seguimiento, cuenta ───────────────────────────

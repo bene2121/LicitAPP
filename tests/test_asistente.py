@@ -119,6 +119,8 @@ def test_where_vivo_solo_procesos_abiertos_y_filtros_seguros():
     w = where_vivo({"q": "pavimentación' OR '1'='1", "po_min": 1000, "po_max": 5000, "dias_cierre_max": 30}, date(2026, 11, 9))
     assert "fecha_de_recepcion_de >= '2026-11-09" in w and "precio_base <= 5000" in w
     assert "'' OR ''1''=''1" in w.replace("PAVIMENTACION", "").upper() or "''1''" in w
+    w_municipio = where_vivo({"municipio": "Barranquilla"}, date(2026, 11, 9))
+    assert "ciudad_de_la_unidad_de" in w_municipio and "ciudad_entidad" in w_municipio
 
 
 def test_explorador_en_vivo_y_guardar(tmp_path):
