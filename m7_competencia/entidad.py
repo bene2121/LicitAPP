@@ -158,16 +158,21 @@ def analizar_entidad(proceso: dict, cliente=None, hoy: date | None = None, anos:
 
 
 SECCIONES_PLIEGO = {
+    "Objeto y alcance": ("objeto del proceso", "objeto a contratar", "alcance del objeto", "alcance del contrato"),
+    "Presupuesto y forma de pago": ("presupuesto oficial", "valor estimado", "forma de pago", "disponibilidad presupuestal"),
+    "Cronograma": ("cronograma del proceso", "fecha de cierre", "plazo para presentar", "presentacion de ofertas"),
     "Experiencia": ("experiencia general", "experiencia especifica", "experiencia específica", "contratos acreditados"),
     "Requisitos habilitantes": ("requisitos habilitantes", "capacidad juridica", "capacidad jurídica"),
     "Capacidad financiera": ("indice de liquidez", "índice de liquidez", "endeudamiento", "cobertura de intereses"),
     "Capacidad organizacional": ("rentabilidad del patrimonio", "rentabilidad del activo", "capacidad organizacional"),
     "Causales de rechazo": ("causales de rechazo", "rechazo de la oferta", "será rechazada"),
     "Personal y equipo": ("personal minimo", "personal mínimo", "equipo minimo", "equipo mínimo"),
+    "Garantías": ("garantia de seriedad", "garantía de seriedad", "garantia unica", "garantía única"),
+    "Documentos y formatos": ("documentos de la oferta", "formatos de la oferta", "anexos de la oferta", "contenido de la oferta"),
 }
 
 
-def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250) -> dict:
+def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str = "Pliego de condiciones") -> dict:
     """Extrae fragmentos literales; no decide por sí solo si el proponente cumple."""
     if not datos or len(datos) > 50 * 1024 * 1024:
         raise ValueError("El pliego debe ser un PDF válido de máximo 50 MB.")
@@ -185,9 +190,10 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250) -> dict:
         if texto:
             textos.append((numero, texto))
     if not textos:
-        return {"paginas": len(lector.pages), "legibles": 0, "secciones": {},
+        return {"documento": documento, "paginas": len(lector.pages), "legibles": 0, "cobertura": 0,
+                "estado_lectura": "escaneado_sin_ocr", "secciones": {}, "hallazgos": [],
                 "aviso": "El PDF parece escaneado y no contiene texto seleccionable. Requiere OCR o revisión manual."}
-    hallazgos = {}
+    secciones, hallazgos = {}, []
     for titulo, terminos in SECCIONES_PLIEGO.items():
         encontrados = []
         for pagina, texto in textos:
@@ -197,13 +203,39 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250) -> dict:
             if posiciones:
                 pos = min(posiciones)
                 inicio, fin = max(0, pos - 180), min(len(texto), pos + 650)
-                encontrados.append({"pagina": pagina, "texto": texto[inicio:fin]})
+                fragmento = texto[inicio:fin]
+                item = {"id": f"{fold(titulo).lower().replace(' ', '_')}_{pagina}_{len(encontrados) + 1}",
+                        "categoria": titulo, "documento": documento, "pagina": pagina,
+                        "texto": fragmento, "estado": "sin_verificar"}
+                encontrados.append(item)
+                hallazgos.append(item)
             if len(encontrados) >= 4:
                 break
         if encontrados:
-            hallazgos[titulo] = encontrados
-    return {"paginas": len(lector.pages), "legibles": len(textos), "secciones": hallazgos,
+            secciones[titulo] = encontrados
+    cobertura = round(len(textos) / len(lector.pages) * 100) if lector.pages else 0
+    estado = "texto_completo" if cobertura >= 90 else "texto_parcial"
+    return {"documento": documento, "paginas": len(lector.pages), "legibles": len(textos),
+            "cobertura": cobertura, "estado_lectura": estado, "secciones": secciones, "hallazgos": hallazgos,
             "aviso": "Fragmentos encontrados automáticamente. Confirma siempre el texto completo, tablas y adendas."}
+
+
+def hallazgos_a_requisitos(lectura: dict, confirmados: dict | set | list) -> list[dict]:
+    """Convierte únicamente hallazgos confirmados por una persona en requisitos."""
+    claves = set(confirmados if not isinstance(confirmados, dict) else
+                 [k for k, valor in confirmados.items() if valor])
+    requisitos = []
+    for item in lectura.get("hallazgos") or []:
+        if item.get("id") not in claves:
+            continue
+        requisitos.append({
+            "requisito": str(item.get("texto") or "").strip()[:500],
+            "grupo": str(item.get("categoria") or "Otro"),
+            "estado": "Pendiente", "critico": item.get("categoria") == "Causales de rechazo",
+            "fuente": f"{item.get('documento') or lectura.get('documento') or 'Documento'}, p. {item.get('pagina')}",
+            "evidencia": "", "responsable": "", "fecha_limite": "",
+        })
+    return requisitos
 
 
 def guardar_dossier(proceso: dict, analisis: dict, raiz: Path | str) -> Path:

@@ -217,6 +217,32 @@ def test_ficha_decision_es_conservadora_y_trazable():
     assert descartada["decision"] == "DESCARTAR"
 
 
+def test_hallazgos_pdf_solo_entran_a_matriz_si_se_confirman():
+    from m7_competencia.entidad import hallazgos_a_requisitos
+    lectura = {"documento": "pliego.pdf", "hallazgos": [
+        {"id": "exp_12", "categoria": "Experiencia", "documento": "pliego.pdf", "pagina": 12,
+         "texto": "El proponente acreditará experiencia en dos contratos."},
+        {"id": "rechazo_40", "categoria": "Causales de rechazo", "documento": "pliego.pdf", "pagina": 40,
+         "texto": "La oferta será rechazada si no está firmada."},
+    ]}
+    requisitos = hallazgos_a_requisitos(lectura, {"exp_12": True, "rechazo_40": False})
+    assert len(requisitos) == 1
+    assert requisitos[0]["estado"] == "Pendiente"
+    assert requisitos[0]["fuente"] == "pliego.pdf, p. 12"
+    assert not requisitos[0]["critico"]
+
+
+def test_pdf_escaneado_reporta_estado_sin_inventar_hallazgos():
+    import io
+    from pypdf import PdfWriter
+    from m7_competencia.entidad import extraer_requisitos_pdf
+    salida = io.BytesIO()
+    escritor = PdfWriter(); escritor.add_blank_page(width=300, height=300); escritor.write(salida)
+    lectura = extraer_requisitos_pdf(salida.getvalue(), documento="escaneado.pdf")
+    assert lectura["estado_lectura"] == "escaneado_sin_ocr"
+    assert lectura["cobertura"] == 0 and lectura["hallazgos"] == []
+
+
 def test_historial_entidad_agrupa_oferentes_y_adjudicatarios():
     from datetime import date
     from m7_competencia.entidad import analizar_entidad

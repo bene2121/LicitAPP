@@ -41,17 +41,19 @@ oferta; la presentación final siempre la realiza el usuario.
 
 ## Fase 1 — Resumen verificable del pliego
 
+**Estado:** `[~] En desarrollo` — primer incremento implementado.
+
 **Resultado:** una persona sin experiencia entiende qué compra la entidad, qué
 debe acreditar y dónde aparece cada exigencia.
 
 - [ ] Descargar y catalogar pliego, anexos, formatos y adendas disponibles.
-- [ ] Extraer texto de PDF nativo y aplicar OCR local a documentos escaneados.
+- [~] Extraer texto de PDF nativo y aplicar OCR local a documentos escaneados.
 - [ ] Detectar: objeto, alcance, presupuesto, cronograma, experiencia, indicadores,
   personal, equipos, licencias, garantías, documentos y causales de rechazo.
-- [ ] Mostrar documento, página y fragmento para cada hallazgo.
-- [ ] Permitir corregir, confirmar o descartar cada hallazgo automático.
-- [ ] Convertir requisitos confirmados en la matriz y el checklist de la oferta.
-- [ ] Mostrar estado de lectura: completo, parcial, escaneado o fallido.
+- [x] Mostrar documento, página y fragmento para cada hallazgo.
+- [~] Permitir corregir, confirmar o descartar cada hallazgo automático.
+- [~] Convertir requisitos confirmados en la matriz y el checklist de la oferta.
+- [x] Mostrar estado de lectura: completo, parcial, escaneado o fallido.
 
 **Aceptación:** probar al menos 10 procesos de modalidades y sectores distintos;
 ningún requisito sin referencia puede presentarse como confirmado.

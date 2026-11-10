@@ -351,7 +351,7 @@ def _paso_documentos(perfil: dict) -> None:
 # ── 3. Evaluación previa ────────────────────────────────────────────────────
 def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
     from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total, ficha_decision
-    from m7_competencia.entidad import analizar_entidad, extraer_requisitos_pdf
+    from m7_competencia.entidad import analizar_entidad, extraer_requisitos_pdf, hallazgos_a_requisitos
 
     proceso = st.session_state.get("proceso_seleccionado") or {}
     proceso_id = str(proceso.get("id") or proceso.get("referencia") or "proceso")
@@ -384,19 +384,41 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
         if pliego and st.button("Analizar pliego", key=f"eval_analizar_pliego_{proceso_id}"):
             with st.spinner("Leyendo el pliego…"):
                 try:
-                    st.session_state[f"pliego_resultado_{proceso_id}"] = extraer_requisitos_pdf(pliego.getvalue())
+                    st.session_state[f"pliego_resultado_{proceso_id}"] = extraer_requisitos_pdf(
+                        pliego.getvalue(), documento=pliego.name)
                 except ValueError as exc:
                     st.error(str(exc))
         lectura = st.session_state.get(f"pliego_resultado_{proceso_id}")
         if lectura:
-            st.caption(f"Páginas: {lectura['paginas']} · con texto legible: {lectura['legibles']}")
+            estados = {"texto_completo": "Texto legible", "texto_parcial": "Lectura parcial",
+                       "escaneado_sin_ocr": "Escaneado: requiere OCR o revisión manual"}
+            st.caption(f"Documento: {lectura.get('documento', 'Pliego')} · Páginas: {lectura['paginas']} · "
+                       f"legibles: {lectura['legibles']} · cobertura: {lectura.get('cobertura', 0)} % · "
+                       f"estado: {estados.get(lectura.get('estado_lectura'), 'Sin verificar')}")
             st.warning(lectura["aviso"])
             if not lectura["secciones"]:
                 st.info("No se localizaron secciones automáticamente. Revisa el PDF completo y sus anexos.")
+            confirmados = dict(previa.get("hallazgos_confirmados") or {})
             for titulo, fragmentos in lectura["secciones"].items():
                 st.markdown(f"**{titulo}**")
                 for fragmento in fragmentos:
-                    st.caption(f"Página {fragmento['pagina']}: …{fragmento['texto']}…")
+                    st.caption(f"{fragmento.get('documento', lectura.get('documento'))}, página {fragmento['pagina']}: "
+                               f"…{fragmento['texto']}…")
+                    confirmados[fragmento["id"]] = st.checkbox(
+                        "Confirmé que este fragmento contiene una exigencia aplicable",
+                        value=bool(confirmados.get(fragmento["id"])), key=f"hallazgo_{proceso_id}_{fragmento['id']}")
+            if lectura.get("hallazgos") and st.button("Enviar confirmados a la matriz", key=f"importar_hallazgos_{proceso_id}"):
+                nuevos = hallazgos_a_requisitos(lectura, confirmados)
+                existentes = list(previa.get("matriz_requisitos") or [])
+                fuentes = {(x.get("fuente"), x.get("requisito")) for x in existentes}
+                existentes.extend(x for x in nuevos if (x.get("fuente"), x.get("requisito")) not in fuentes)
+                previa["matriz_requisitos"] = existentes
+                previa["hallazgos_confirmados"] = confirmados
+                guardadas[proceso_id] = previa
+                perfil["evaluaciones_requisitos"] = guardadas
+                guardar_perfil(perfil)
+                st.success(f"Se agregaron {len(nuevos)} hallazgos confirmados a la matriz.")
+                st.rerun()
 
     with st.expander("Historial de esta entidad — últimos 3 años", expanded=False):
         st.markdown("Muestra quiénes han presentado ofertas y quiénes han recibido contratos publicados por la entidad. "
