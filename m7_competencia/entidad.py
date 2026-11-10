@@ -38,20 +38,36 @@ def analizar_entidad(proceso: dict, cliente=None, hoy: date | None = None, anos:
     filtro_ofertas = (f"nit_entidad_compradora='{soql_literal(nit)}'" if nit else
                       f"upper(entidad_compradora) like '%{soql_literal(fold(nombre).upper())}%'")
     procesos_contexto, presupuestos = [], {}
+    nivel_comparacion = "historial general de la entidad"
+    filtros_usados = []
     if filtrar_contexto:
         filtro_proceso = (f"nit_entidad='{soql_literal(nit)}'" if nit else
                           f"upper(entidad) like '%{soql_literal(fold(nombre).upper())}%'")
         modalidad = fold(proceso.get("modalidad") or "").upper()
+        modalidad_like = re.sub(r"[AEIOU]", "_", modalidad).replace("%", "")
         unspsc = "".join(c for c in str(proceso.get("unspsc") or "") if c.isdigit())[:2]
-        partes = [filtro_proceso, f"fecha_de_publicacion_del >= '{desde}T00:00:00'"]
-        if modalidad:
-            partes.append(f"upper(modalidad_de_contratacion) like '%{soql_literal(modalidad)}%'")
-        if unspsc:
-            partes.append(f"codigo_principal_de_categoria like 'V1.{soql_literal(unspsc)}%'")
-        procesos_contexto = cliente(API_PROCESOS, {
-            "$select": "id_del_portafolio,referencia_del_proceso,precio_base,nombre_del_procedimiento",
-            "$where": " AND ".join(partes), "$order": "fecha_de_publicacion_del DESC", "$limit": "200",
-        }) or []
+        base = [filtro_proceso, f"fecha_de_publicacion_del >= '{desde}T00:00:00'"]
+        filtro_modalidad = (f"upper(modalidad_de_contratacion) like '%{soql_literal(modalidad_like)}%'"
+                            if modalidad else "")
+        filtro_unspsc = f"codigo_principal_de_categoria like 'V1.{soql_literal(unspsc)}%'" if unspsc else ""
+        niveles = []
+        if filtro_modalidad and filtro_unspsc:
+            niveles.append(("misma modalidad y familia UNSPSC", [filtro_modalidad, filtro_unspsc]))
+        if filtro_unspsc:
+            niveles.append(("misma familia UNSPSC", [filtro_unspsc]))
+        if filtro_modalidad:
+            niveles.append(("misma modalidad", [filtro_modalidad]))
+        niveles.append(("historial general de la entidad", []))
+        for nivel, extras in niveles:
+            procesos_contexto = cliente(API_PROCESOS, {
+                "$select": ("id_del_portafolio,referencia_del_proceso,precio_base,nombre_del_procedimiento,"
+                            "modalidad_de_contratacion,codigo_principal_de_categoria"),
+                "$where": " AND ".join(base + extras), "$order": "fecha_de_publicacion_del DESC", "$limit": "200",
+            }) or []
+            if procesos_contexto:
+                nivel_comparacion = nivel
+                filtros_usados = extras
+                break
         ids = [str(f.get("id_del_portafolio") or "") for f in procesos_contexto if f.get("id_del_portafolio")]
         presupuestos = {str(f.get("id_del_portafolio")): _numero(f.get("precio_base")) for f in procesos_contexto}
         ofertas = []
@@ -134,6 +150,9 @@ def analizar_entidad(proceso: dict, cliente=None, hoy: date | None = None, anos:
         "oferentes_unicos": len(oferentes), "oferentes": tabla_oferentes[:30],
         "adjudicatarios": tabla_ganadores[:30], "contratos_recientes": contratos[:30],
         "contexto": filtrar_contexto, "procesos_contexto": len(procesos_contexto),
+        "nivel_comparacion": nivel_comparacion, "filtros_usados": filtros_usados,
+        "estado_datos": ("con_datos" if ofertas or contratos else
+                         "sin_ofertas_publicadas" if procesos_contexto else "sin_procesos_comparables"),
         "nota": "Conteos construidos con ofertas y contratos publicados en Datos Abiertos SECOP II.",
     }
 

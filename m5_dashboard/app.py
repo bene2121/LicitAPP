@@ -706,8 +706,12 @@ with tab1:
                         ac2.metric("Ofertas", _hist.get("ofertas", 0))
                         ac3.metric("Oferentes", _hist.get("oferentes_unicos", 0))
                         ac4.metric("Contratos", _hist.get("contratos", 0))
-                        st.caption(f"Periodo: {_hist.get('desde')} a {_hist.get('hasta')}. "
-                                   "Filtro: misma entidad, modalidad y familia UNSPSC.")
+                        st.caption(f"Periodo: {_hist.get('desde')} a {_hist.get('hasta')} · "
+                                   f"Comparación usada: {_hist.get('nivel_comparacion', 'entidad')} · "
+                                   f"Cobertura: {_hist.get('procesos_contexto', 0)} procesos publicados.")
+                        if _hist.get("nivel_comparacion") != "misma modalidad y familia UNSPSC":
+                            st.warning("La cohorte exacta no tenía muestra suficiente. LicitAPP amplió la búsqueda a: "
+                                       + str(_hist.get("nivel_comparacion", "historial de la entidad")) + ".")
                         if _hist.get("oferentes"):
                             st.markdown("**Quiénes se presentan y cómo ofertan**")
                             st.dataframe([{
@@ -1076,6 +1080,63 @@ with tab2:
 with tab3:
     st.subheader("📁 Gestor de Documentos Habilitantes")
     perfil = st.session_state.perfil
+
+    st.markdown("### Biblioteca reutilizable del proponente")
+    st.caption("Carga una vez los soportes generales. LicitAPP copiará únicamente los vigentes a cada nueva oferta. "
+               "Las cartas, garantías y propuestas económicas no se reutilizan porque pertenecen a un proceso específico.")
+    _categorias_biblioteca = {
+        "existencia": "Cámara de Comercio / existencia",
+        "rut": "RUT",
+        "rup": "RUP",
+        "seguridad_social": "Seguridad social y parafiscales",
+        "experiencia": "Experiencia y certificados",
+        "financiero": "Estados e indicadores financieros",
+        "otros": "Otros soportes generales",
+    }
+    _cat_doc = st.selectbox("Tipo de documento", list(_categorias_biblioteca),
+                            format_func=lambda x: _categorias_biblioteca[x], key="biblioteca_categoria")
+    _vence_doc = st.text_input("Vigente hasta (AAAA-MM-DD; vacío si no vence)", key="biblioteca_vence",
+                               placeholder="2027-01-31")
+    _subidas_biblioteca = st.file_uploader(
+        "Agregar documentos a la biblioteca", accept_multiple_files=True,
+        type=["pdf", "docx", "doc", "xlsx", "xls", "jpg", "jpeg", "png", "zip", "rar"],
+        key="biblioteca_subidas")
+    if st.button("Guardar en mi biblioteca", key="biblioteca_guardar"):
+        from pathlib import Path as _Path
+        _base_biblioteca = _Path(DATA_DIR) / "documentos_proponente" / _cat_doc
+        _base_biblioteca.mkdir(parents=True, exist_ok=True)
+        _biblioteca = perfil.setdefault("biblioteca_documentos", [])
+        for _archivo in _subidas_biblioteca or []:
+            _nombre = nombre_archivo_seguro(_Path(_archivo.name).stem, largo=90) + _Path(_archivo.name).suffix.lower()
+            _ruta = _base_biblioteca / _nombre
+            _ruta.write_bytes(_archivo.getvalue())
+            _registro = next((x for x in _biblioteca if str(x.get("ruta")) == str(_ruta)), None)
+            _datos_doc = {"nombre": _archivo.name, "categoria": _cat_doc, "vence": _vence_doc.strip(),
+                          "ruta": str(_ruta), "cargado": datetime.now().isoformat()}
+            if _registro:
+                _registro.update(_datos_doc)
+            else:
+                _biblioteca.append(_datos_doc)
+        perfil["biblioteca_documentos"] = _biblioteca
+        st.session_state.perfil = perfil
+        guardar_perfil(perfil)
+        st.success(f"{len(_subidas_biblioteca or [])} documento(s) guardado(s) en la biblioteca.")
+
+    _biblioteca_actual = perfil.get("biblioteca_documentos") or []
+    if _biblioteca_actual:
+        _hoy_bib = datetime.now().date()
+        _tabla_bib = []
+        for _doc in _biblioteca_actual:
+            _vence = str(_doc.get("vence") or "")
+            try:
+                _estado = "❌ Vencido" if _vence and datetime.fromisoformat(_vence[:10]).date() < _hoy_bib else "✅ Disponible"
+            except ValueError:
+                _estado = "⚠️ Revisar fecha"
+            _tabla_bib.append({"Documento": _doc.get("nombre"), "Tipo": _categorias_biblioteca.get(_doc.get("categoria"), _doc.get("categoria")),
+                               "Vigente hasta": _vence or "No vence", "Estado": _estado})
+        st.dataframe(_tabla_bib, hide_index=True, width="stretch")
+    else:
+        st.info("La biblioteca está vacía. Agrega tus documentos habituales para acelerar la siguiente propuesta.")
 
     # ── JURÍDICOS ─────────────────────────────────────────────────────────────
     with st.expander("📜 DOCUMENTOS JURÍDICOS", expanded=True):

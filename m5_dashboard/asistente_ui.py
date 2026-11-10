@@ -253,10 +253,15 @@ def _paso_documentos(perfil: dict) -> None:
     proceso = st.session_state.get("proceso_seleccionado") or {}
     oferta = st.session_state.get("oferta_guardada") or {}
     carpeta = A.crear_expediente(perfil, proceso, oferta)
+    reutilizados = A.sincronizar_documentos_reutilizables(carpeta, perfil)
     st.markdown("### Completa la lista de documentos")
     st.markdown(f"Tus documentos se guardan en `{carpeta}`. Ya dejé ahí la **carta de presentación** "
                 + ("y el **documento del consorcio** " if perfil.get("proponente_plural") else "")
                 + "en Word con tus datos: revísalos, fírmalos y súbelos en PDF.")
+    if reutilizados["copiados"]:
+        st.success(f"Se reutilizaron {len(reutilizados['copiados'])} documentos vigentes de tu biblioteca.")
+    if reutilizados["vencidos"]:
+        st.warning("Debes renovar o solicitar: " + ", ".join(reutilizados["vencidos"]))
     confirmaciones = A.cargar_checklist(carpeta)
     st.markdown("#### Tablero de alistamiento de esta oferta")
     st.caption("Marca cada control únicamente después de compararlo con el pliego y la última adenda. "

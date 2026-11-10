@@ -220,3 +220,42 @@ def test_historial_entidad_agrupa_oferentes_y_adjudicatarios():
     assert r["desde"] == "2023-11-09" and r["procesos_con_ofertas"] == 2
     assert r["oferentes"][0]["nombre"] == "ALFA SAS" and r["oferentes"][0]["adjudicaciones"] == 1
     assert r["adjudicatarios"][0]["contratos"] == 1
+
+
+def test_historial_contextual_tolera_tildes_y_no_devuelve_falso_cero():
+    from datetime import date
+    from m7_competencia.entidad import analizar_entidad
+
+    def cliente_contexto(url, params):
+        if "p6dx-8zbt" in url:
+            assert "M_N_M_ C__NT__" in params["$where"]
+            return [{"id_del_portafolio": "P1", "precio_base": "100"}]
+        if "wi7w-2nvm" in url:
+            return [{"identificador_de_la_oferta": "O1", "id_del_proceso_de_compra": "P1",
+                     "nombre_proveedor": "ALFA", "nit_del_proveedor": "9001", "valor_de_la_oferta": "90"}]
+        if "jbjy-vk9h" in url:
+            return [{"id_contrato": "C1", "proceso_de_compra": "P1", "proveedor_adjudicado": "ALFA",
+                     "documento_proveedor": "9001", "valor_del_contrato": "90"}]
+        return []
+
+    r = analizar_entidad({"entidad": "ENTIDAD", "nit_entidad": "8001", "modalidad": "Mínima cuantía",
+                          "unspsc": "UNSPECIFIED"}, cliente_contexto, date(2026, 11, 10), anos=2,
+                         filtrar_contexto=True)
+    assert r["nivel_comparacion"] == "misma modalidad"
+    assert r["procesos_contexto"] == 1 and r["ofertas"] == 1 and r["contratos"] == 1
+
+
+def test_reutiliza_documentos_vigentes_y_excluye_vencidos(tmp_path):
+    from datetime import date
+    from m6_propuesta import asistente as A
+    vigente = tmp_path / "RUT vigente.pdf"; vigente.write_bytes(b"%PDF")
+    vencido = tmp_path / "RUP viejo.pdf"; vencido.write_bytes(b"%PDF")
+    perfil = {"empresa": "ALFA", "nit": "9001", "representante": "ANA",
+              "biblioteca_documentos": [
+                  {"nombre": vigente.name, "categoria": "rut", "vence": "2027-01-01", "ruta": str(vigente)},
+                  {"nombre": vencido.name, "categoria": "rup", "vence": "2025-01-01", "ruta": str(vencido)},
+              ]}
+    carpeta = A.crear_expediente(perfil, {"id": "P1"}, {"precio": 100}, base=tmp_path / "exp")
+    r = A.sincronizar_documentos_reutilizables(carpeta, perfil, date(2026, 11, 10))
+    assert "RUT_vigente.pdf" in r["copiados"] and vencido.name in r["vencidos"]
+    assert list((carpeta / A.SECCIONES[3][1]).glob("*.pdf"))

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -151,6 +152,38 @@ def guardar_checklist(carpeta: Path, datos: dict) -> None:
     temporal = ruta.with_suffix(".tmp")
     temporal.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
     temporal.replace(ruta)
+
+
+def sincronizar_documentos_reutilizables(carpeta: Path, perfil: dict, hoy: date | None = None) -> dict:
+    """Copia al expediente únicamente soportes reutilizables y vigentes."""
+    hoy = hoy or date.today()
+    destinos = {clave: nombre for clave, nombre, _ in SECCIONES}
+    permitidos = {"existencia", "rut", "rup", "seguridad_social", "experiencia", "financiero", "otros"}
+    copiados, vencidos, no_encontrados = [], [], []
+    for item in perfil.get("biblioteca_documentos") or []:
+        clave = str(item.get("categoria") or "")
+        if clave not in permitidos or clave not in destinos:
+            continue
+        ruta = Path(str(item.get("ruta") or ""))
+        vence = str(item.get("vence") or "").strip()
+        if vence:
+            try:
+                if date.fromisoformat(vence[:10]) < hoy:
+                    vencidos.append(item.get("nombre") or ruta.name)
+                    continue
+            except ValueError:
+                vencidos.append(item.get("nombre") or ruta.name)
+                continue
+        if not ruta.is_file():
+            no_encontrados.append(item.get("nombre") or ruta.name)
+            continue
+        destino = carpeta / destinos[clave] / nombre_archivo_seguro(ruta.stem, largo=80)
+        destino = destino.with_suffix(ruta.suffix.lower())
+        if not destino.exists():
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ruta, destino)
+        copiados.append(destino.name)
+    return {"copiados": copiados, "vencidos": vencidos, "no_encontrados": no_encontrados}
 
 
 def estado_checklist(carpeta: Path, plural: bool, confirmaciones: dict | None = None) -> dict:
