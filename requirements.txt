@@ -8,6 +8,10 @@ openpyxl>=3.1.0
 # Propuesta desde expediente (formatos Word y PDF)
 python-docx>=1.1.0
 pypdf>=6.21.4
+# OCR local para pliegos escaneados (modelos incluidos; no envía documentos a internet)
+rapidocr>=3.4,<4
+onnxruntime>=1.18,<2
+pypdfium2>=4.30,<5
 
 # Base de datos
 sqlalchemy>=2.0.0
@@ -25,5 +29,6 @@ apscheduler>=3.10.0
 # Utilidades
 python-dotenv>=1.2.2
 rich>=13.0.0
+cryptography>=44,<47
 pywebview==4.4.1
 httpx==0.27.0

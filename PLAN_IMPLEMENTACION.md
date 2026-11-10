@@ -47,7 +47,7 @@ oferta; la presentación final siempre la realiza el usuario.
 debe acreditar y dónde aparece cada exigencia.
 
 - [~] Descargar y catalogar pliego, anexos, formatos y adendas disponibles.
-- [~] Extraer texto de PDF nativo y aplicar OCR local a documentos escaneados.
+- [x] Extraer texto de PDF nativo y aplicar OCR local a documentos escaneados.
 - [ ] Detectar: objeto, alcance, presupuesto, cronograma, experiencia, indicadores,
   personal, equipos, licencias, garantías, documentos y causales de rechazo.
 - [x] Mostrar documento, página y fragmento para cada hallazgo.

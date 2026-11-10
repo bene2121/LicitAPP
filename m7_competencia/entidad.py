@@ -171,8 +171,33 @@ SECCIONES_PLIEGO = {
     "Documentos y formatos": ("documentos de la oferta", "formatos de la oferta", "anexos de la oferta", "contenido de la oferta"),
 }
 
+_MOTOR_OCR = None
 
-def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str = "Pliego de condiciones") -> dict:
+
+def _paginas_con_ocr(datos: bytes, paginas: list[int], escala: float = 2.0) -> tuple[list[tuple[int, str]], str | None]:
+    """OCR local con modelos incluidos. Los índices de ``paginas`` empiezan en cero."""
+    global _MOTOR_OCR
+    try:
+        import numpy as np
+        import pypdfium2 as pdfium
+        from rapidocr import RapidOCR
+        if _MOTOR_OCR is None:
+            _MOTOR_OCR = RapidOCR()
+        pdf = pdfium.PdfDocument(datos)
+        textos = []
+        for indice in paginas:
+            imagen = pdf[indice].render(scale=escala).to_pil().convert("RGB")
+            resultado = _MOTOR_OCR(np.asarray(imagen))
+            lineas = [str(x).strip() for x in (getattr(resultado, "txts", None) or []) if str(x).strip()]
+            if lineas:
+                textos.append((indice + 1, " ".join(lineas)))
+        return textos, None
+    except Exception as exc:
+        return [], f"{type(exc).__name__}: {str(exc)[:180]}"
+
+
+def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str = "Pliego de condiciones",
+                           usar_ocr: bool = True, max_paginas_ocr: int = 60) -> dict:
     """Extrae fragmentos literales; no decide por sí solo si el proponente cumple."""
     if not datos or len(datos) > 50 * 1024 * 1024:
         raise ValueError("El pliego debe ser un PDF válido de máximo 50 MB.")
@@ -181,7 +206,7 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str 
         lector = PdfReader(io.BytesIO(datos), strict=False)
     except Exception as exc:
         raise ValueError("No fue posible abrir el PDF del pliego.") from exc
-    textos = []
+    textos, paginas_sin_texto = [], []
     for numero, pagina in enumerate(lector.pages[:max_paginas], start=1):
         try:
             texto = " ".join((pagina.extract_text() or "").split())
@@ -189,10 +214,21 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str 
             texto = ""
         if texto:
             textos.append((numero, texto))
+        else:
+            paginas_sin_texto.append(numero - 1)
+    paginas_ocr, error_ocr = [], None
+    limite_ocr = max(0, min(int(max_paginas_ocr), len(paginas_sin_texto)))
+    if usar_ocr and limite_ocr:
+        paginas_ocr, error_ocr = _paginas_con_ocr(datos, paginas_sin_texto[:limite_ocr])
+        textos.extend(paginas_ocr)
+        textos.sort(key=lambda x: x[0])
     if not textos:
         return {"documento": documento, "paginas": len(lector.pages), "legibles": 0, "cobertura": 0,
-                "estado_lectura": "escaneado_sin_ocr", "secciones": {}, "hallazgos": [],
-                "aviso": "El PDF parece escaneado y no contiene texto seleccionable. Requiere OCR o revisión manual."}
+                "estado_lectura": "ocr_fallido" if error_ocr else "escaneado_sin_texto",
+                "paginas_ocr": 0, "motor_ocr": "RapidOCR local" if usar_ocr else None,
+                "error_ocr": error_ocr, "secciones": {}, "hallazgos": [],
+                "aviso": ("El OCR local no pudo leer el documento. Requiere revisión manual."
+                           if error_ocr else "El documento no contiene texto reconocible. Requiere revisión manual.")}
     secciones, hallazgos = {}, []
     for titulo, terminos in SECCIONES_PLIEGO.items():
         encontrados = []
@@ -215,9 +251,14 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str 
         if encontrados:
             secciones[titulo] = encontrados
     cobertura = round(len(textos) / len(lector.pages) * 100) if lector.pages else 0
-    estado = "texto_completo" if cobertura >= 90 else "texto_parcial"
+    estado = ("ocr_completo" if paginas_ocr and cobertura >= 90 else
+              "ocr_parcial" if paginas_ocr else
+              "texto_completo" if cobertura >= 90 else "texto_parcial")
     return {"documento": documento, "paginas": len(lector.pages), "legibles": len(textos),
-            "cobertura": cobertura, "estado_lectura": estado, "secciones": secciones, "hallazgos": hallazgos,
+            "cobertura": cobertura, "estado_lectura": estado, "paginas_ocr": len(paginas_ocr),
+            "motor_ocr": "RapidOCR local" if paginas_ocr else None, "error_ocr": error_ocr,
+            "ocr_limitado": len(paginas_sin_texto) > limite_ocr,
+            "secciones": secciones, "hallazgos": hallazgos,
             "aviso": "Fragmentos encontrados automáticamente. Confirma siempre el texto completo, tablas y adendas."}
 
 

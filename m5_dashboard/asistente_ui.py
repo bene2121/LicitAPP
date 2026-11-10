@@ -392,7 +392,8 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
         lectura = st.session_state.get(f"pliego_resultado_{proceso_id}")
         if lectura:
             estados = {"texto_completo": "Texto legible", "texto_parcial": "Lectura parcial",
-                       "escaneado_sin_ocr": "Escaneado: requiere OCR o revisión manual"}
+                       "ocr_completo": "Leído con OCR local", "ocr_parcial": "OCR local parcial",
+                       "ocr_fallido": "Falló OCR: revisión manual", "escaneado_sin_texto": "Sin texto reconocible"}
             st.caption(f"Documento: {lectura.get('documento', 'Pliego')} · Páginas: {lectura['paginas']} · "
                        f"legibles: {lectura['legibles']} · cobertura: {lectura.get('cobertura', 0)} % · "
                        f"estado: {estados.get(lectura.get('estado_lectura'), 'Sin verificar')}")
@@ -401,6 +402,7 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
                 st.dataframe([{
                     "Documento": x.get("documento"), "Páginas": x.get("paginas"),
                     "Páginas legibles": x.get("legibles"), "Cobertura": f"{x.get('cobertura', 0)} %",
+                    "Páginas con OCR": x.get("paginas_ocr", 0),
                     "Estado": estados.get(x.get("estado_lectura"), "Sin verificar"),
                 } for x in lectura["documentos"]], hide_index=True, width="stretch")
             if lectura.get("impactos_adendas"):

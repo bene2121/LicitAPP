@@ -69,6 +69,9 @@ for _pkg in (
 # Paquetes con datos/plantillas propias
 for _pkg in ("docx", "openpyxl", "pypdf", "plotly", "certifi"):
     _todo(_pkg, requerido=_pkg in ("docx", "openpyxl", "pypdf"))
+# OCR enteramente local: RapidOCR incluye sus modelos ONNX dentro del paquete.
+for _pkg in ("rapidocr", "onnxruntime", "pypdfium2", "cv2"):
+    _todo(_pkg, requerido=_pkg in ("rapidocr", "onnxruntime", "pypdfium2"))
 # Streamlit usa pyarrow/pandas a fondo: hooks de PyInstaller cubren sus binarios.
 hiddenimports += collect_submodules("streamlit.runtime")
 hiddenimports += collect_submodules("streamlit.web")

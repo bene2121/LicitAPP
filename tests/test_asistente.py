@@ -238,9 +238,22 @@ def test_pdf_escaneado_reporta_estado_sin_inventar_hallazgos():
     from m7_competencia.entidad import extraer_requisitos_pdf
     salida = io.BytesIO()
     escritor = PdfWriter(); escritor.add_blank_page(width=300, height=300); escritor.write(salida)
-    lectura = extraer_requisitos_pdf(salida.getvalue(), documento="escaneado.pdf")
-    assert lectura["estado_lectura"] == "escaneado_sin_ocr"
+    lectura = extraer_requisitos_pdf(salida.getvalue(), documento="escaneado.pdf", usar_ocr=False)
+    assert lectura["estado_lectura"] == "escaneado_sin_texto"
     assert lectura["cobertura"] == 0 and lectura["hallazgos"] == []
+
+
+def test_ocr_local_incorpora_texto_solo_como_hallazgo_sin_verificar(monkeypatch):
+    import io
+    from pypdf import PdfWriter
+    from m7_competencia import entidad
+    salida = io.BytesIO(); escritor = PdfWriter(); escritor.add_blank_page(width=300, height=300); escritor.write(salida)
+    monkeypatch.setattr(entidad, "_paginas_con_ocr", lambda datos, paginas, escala=2.0:
+                        ([(1, "Experiencia general: dos contratos terminados")], None))
+    lectura = entidad.extraer_requisitos_pdf(salida.getvalue(), documento="scan.pdf", usar_ocr=True)
+    assert lectura["estado_lectura"] == "ocr_completo" and lectura["paginas_ocr"] == 1
+    assert lectura["hallazgos"][0]["estado"] == "sin_verificar"
+    assert lectura["hallazgos"][0]["documento"] == "scan.pdf"
 
 
 def test_expediente_con_varios_pdf_conserva_origen_y_senala_adenda(monkeypatch):
