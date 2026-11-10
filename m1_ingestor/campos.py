@@ -52,7 +52,32 @@ def _url(valor) -> str:
 
 
 def soql_literal(valor: str) -> str:
-    return str(valor).replace("'", "''")
+    """Escapa un valor para ponerlo entre comillas simples en SoQL.
+
+    Duplica la comilla simple (única forma de cerrar el literal) y descarta
+    caracteres de control (NUL, saltos de línea) que no tienen uso legítimo.
+    """
+    limpio = "".join(c for c in str(valor) if c == " " or c.isprintable())
+    return limpio.replace("'", "''")
+
+
+def soql_like(valor: str, largo_max: int = 120) -> str:
+    """Texto seguro para `like '%...%'`: sin comodines del usuario, sin tildes, en mayúsculas.
+
+    Funciona con nombres que traen comillas o &, por ejemplo `CONSORCIO CG&A2M`
+    u `O'BRIEN` (el & no tiene significado dentro del literal y la comilla se duplica).
+    """
+    plano = fold(valor).upper()[:largo_max]
+    return soql_literal(plano).replace("%", "").replace("_", " ")
+
+
+def soql_numero(valor, defecto: float = 0.0) -> float:
+    """Convierte a número finito; nunca deja pasar texto a una comparación numérica."""
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return defecto
+    return numero if numero == numero and numero not in (float("inf"), float("-inf")) else defecto
 
 
 def where_procesos_s2(
@@ -66,7 +91,7 @@ def where_procesos_s2(
     partes = [
         "estado_de_apertura_del_proceso='Abierto'",
         "precio_base > 0",
-        f"precio_base >= {presupuesto_min} AND precio_base <= {presupuesto_max}",
+        f"precio_base >= {soql_numero(presupuesto_min)} AND precio_base <= {soql_numero(presupuesto_max, 1e15)}",
         f"fase in({fases})",
     ]
     codigos = []
@@ -114,7 +139,11 @@ def fila_proceso_s2(registro: dict, fecha_descarga: str, canal_oferta: str = "")
             registro.get("estado_del_procedimiento"),
         ),
         "presupuesto_oficial": precio,
-        "fecha_cierre": "",
+        # Fecha límite para recibir ofertas (en SECOP II se llama fecha_de_recepcion_de).
+        "fecha_cierre": _texto(
+            registro.get("fecha_de_recepcion_de"),
+            registro.get("fecha_de_recepcion_de_ofertas"),
+        )[:10],
         "unspsc": unspsc_codigo(registro.get("codigo_principal_de_categoria")),
         "departamento_entidad": norm_departamento(registro.get("departamento_entidad")),
         "ciudad_unidad": _texto(
@@ -168,13 +197,13 @@ def where_departamentos(nombres: list[str]) -> str:
     """Compara contra el nombre largo que publica SECOP, no contra la sigla local."""
     partes = []
     for nombre in nombres or []:
-        token = fold(nombre).upper().replace("'", "")
-        if not token:
+        token = fold(nombre).upper().replace("'", "").replace("%", "").replace("_", " ")
+        if not token.strip():
             continue
         if "BOGOTA" in token:
             partes.append("upper(departamento_entidad) like '%BOGOT%'")
             continue
-        pista = token[:6]
+        pista = token.strip()[:6]
         partes.append(f"upper(departamento_entidad) like '%{soql_literal(pista)}%'")
     if not partes:
         return ""

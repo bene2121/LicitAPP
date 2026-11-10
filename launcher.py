@@ -3,6 +3,14 @@ Launcher principal de LicitApp.
 Arranca Streamlit internamente y abre la app en ventana nativa Windows (PyWebView).
 No abre el navegador — la app se ve como una aplicación de escritorio.
 """
+import os
+import sys
+
+# Ejecutable sin consola (console=False): sys.stdout/stderr valen None y romperían print/logging.
+for _flujo in ("stdout", "stderr"):
+    if getattr(sys, _flujo) is None:
+        setattr(sys, _flujo, open(os.devnull, "w", encoding="utf-8"))
+
 import multiprocessing
 # FIX-6: freeze_support debe ser lo primero que se llama en el proceso principal
 # de un ejecutable PyInstaller. Sin esto, cualquier dependencia que use
@@ -16,6 +24,8 @@ import traceback
 
 # ── Log de errores de arranque ────────────────────────────────────────────────
 def _log_dir():
+    if os.environ.get("LICITAPP_DATA_DIR"):
+        return os.environ["LICITAPP_DATA_DIR"]
     if getattr(sys, "frozen", False):
         return os.path.join(os.path.dirname(sys.executable), "data")
     return os.path.join(os.path.dirname(__file__), "data")
@@ -48,11 +58,16 @@ except Exception as _e:
 import threading
 import time
 import socket
-import subprocess
-import webview
+import subprocess  # nosec B404 - solo lanza streamlit con argumentos fijos
+
+# Modo de verificación sin ventana: arranca el servidor, imprime la URL y espera.
+# Sirve para probar el ejecutable en equipos sin entorno gráfico.
+SIN_VENTANA = "--sin-ventana" in sys.argv or bool(os.environ.get("LICITAPP_SIN_VENTANA"))
+if not SIN_VENTANA:
+    import webview
 
 # ── Instancia única (solo para el proceso GUI, no para el worker) ─────────────
-if sys.platform == "win32":
+if sys.platform == "win32" and not SIN_VENTANA:
     import ctypes
     _MUTEX = ctypes.windll.kernel32.CreateMutexW(None, False, "LicitApp_SingleInstance")
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
@@ -65,19 +80,42 @@ if sys.platform == "win32":
         sys.exit(0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-PORT = 8501
-STREAMLIT_URL = f"http://localhost:{PORT}"
+HOST = "127.0.0.1"
+
+
+def _elegir_puerto(preferido: int = 8501) -> int:
+    """8501 si está libre; si no, un puerto libre que asigne el sistema."""
+    for candidato in (preferido, 0):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((HOST, candidato))
+                return s.getsockname()[1]
+            except OSError:
+                continue
+    return preferido
+
+
+PORT = int(os.environ.get("LICITAPP_PUERTO") or _elegir_puerto())
+STREAMLIT_URL = f"http://{HOST}:{PORT}"
 
 
 def _puerto_libre(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("localhost", port)) != 0
+        return s.connect_ex((HOST, port)) != 0
 
 
 def _esperar_streamlit(timeout_seg: int = 60) -> bool:
+    """Espera a que Streamlit conteste su chequeo de salud (no solo a que abra el puerto)."""
+    import urllib.request
+
     for _ in range(timeout_seg * 4):
         if not _puerto_libre(PORT):
-            return True
+            try:
+                with urllib.request.urlopen(f"{STREAMLIT_URL}/_stcore/health", timeout=2) as r:  # nosec B310 - URL fija http://127.0.0.1:<puerto> propia
+                    if r.status == 200:
+                        return True
+            except Exception:
+                pass
         time.sleep(0.25)
     return False
 
@@ -98,11 +136,11 @@ def _iniciar_streamlit() -> subprocess.Popen:
         "__streamlit_worker__",
         "run", app_path,
         "--server.port", str(PORT),
-        "--server.address", "127.0.0.1",
+        "--server.address", HOST,
         "--server.headless", "true",
-        "--server.enableCORS", "false",
-        "--server.enableXsrfProtection", "false",
+        "--server.enableXsrfProtection", "true",
         "--browser.gatherUsageStats", "false",
+        "--client.toolbarMode", "viewer",
         "--theme.base", "light",
         "--theme.primaryColor", "#1F4E79",
     ]
@@ -133,7 +171,7 @@ def _iniciar_streamlit() -> subprocess.Popen:
     }
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    return subprocess.Popen(cmd, **kwargs)
+    return subprocess.Popen(cmd, **kwargs)  # nosec B603 - cmd es sys.executable + argumentos fijos, sin datos del usuario
 
 
 _HTML_SPLASH = """
@@ -199,6 +237,26 @@ _HTML_SPLASH = """
 </body>
 </html>
 """
+
+
+def main_sin_ventana():
+    """Arranca Streamlit sin ventana nativa (verificación y soporte)."""
+    proc = _iniciar_streamlit()
+    if not _esperar_streamlit(timeout_seg=90):
+        print("LICITAPP_ERROR: Streamlit no respondió", flush=True)
+        proc.terminate()
+        sys.exit(1)
+    print(f"LICITAPP_LISTA {STREAMLIT_URL}", flush=True)
+    try:
+        while proc.poll() is None:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
 
 
 def main():
@@ -280,7 +338,7 @@ def main():
 if __name__ == "__main__":
     try:
         _write_log("Iniciando main()")
-        main()
+        main_sin_ventana() if SIN_VENTANA else main()
         _write_log("main() terminó normalmente")
     except Exception:
         _write_log(f"ERROR FATAL en main():\n{traceback.format_exc()}")

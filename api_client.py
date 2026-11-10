@@ -2,15 +2,45 @@
 Cliente HTTP para consumir la API central de SECOP Automatizador.
 Los clientes locales usan este módulo en vez de llamar a Socrata directamente.
 """
+import json
 import os
+import sys
+from urllib.parse import quote
+
 import httpx
 from typing import Optional
 from dotenv import load_dotenv
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from seguridad import MAX_RESPUESTA_BYTES, exigir_https
 
 load_dotenv()
 
 API_BASE    = os.getenv("SECOP_API_URL", "https://api.secop-automatizador.com")
 API_TIMEOUT = 15.0
+
+
+def _base() -> str:
+    """URL base de la API central; la licencia viaja en cada petición, así que solo https."""
+    return exigir_https(API_BASE).rstrip("/")
+
+
+def _seg(valor) -> str:
+    """Un dato del usuario como segmento de ruta (sin '/', '..', '?' ni '#')."""
+    return quote(str(valor), safe="")
+
+
+def _get_json(ruta: str, params: Optional[dict] = None, headers: Optional[dict] = None, timeout: float = API_TIMEOUT):
+    """GET con certificado verificado, sin redirecciones y con tope de tamaño de respuesta."""
+    with httpx.stream("GET", f"{_base()}{ruta}", params=params, headers=headers,
+                      timeout=timeout, follow_redirects=False) as r:
+        r.raise_for_status()
+        cuerpo = bytearray()
+        for trozo in r.iter_bytes():
+            cuerpo += trozo
+            if len(cuerpo) > MAX_RESPUESTA_BYTES:
+                raise ValueError("Respuesta demasiado grande")
+    return json.loads(bytes(cuerpo).decode("utf-8"))
 
 
 def _headers() -> dict:
@@ -66,14 +96,7 @@ def get_procesos(
     params["page_size"] = page_size
 
     try:
-        r = httpx.get(
-            f"{API_BASE}/v1/procesos/",
-            params=params,
-            headers=_headers(),
-            timeout=API_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json()
+        return _get_json("/v1/procesos/", params=params, headers=_headers())
     except httpx.ConnectError:
         return {
             "error": "Sin conexión al servidor central. Usando datos locales si están disponibles.",
@@ -88,26 +111,14 @@ def get_procesos(
 
 def get_detalle_proceso(id_proceso: str) -> dict:
     try:
-        r = httpx.get(
-            f"{API_BASE}/v1/procesos/{id_proceso}",
-            headers=_headers(),
-            timeout=API_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json()
+        return _get_json(f"/v1/procesos/{_seg(id_proceso)}", headers=_headers())
     except Exception as e:
         return {"error": str(e)}
 
 
 def get_perfil_competidor(nit: str) -> dict:
     try:
-        r = httpx.get(
-            f"{API_BASE}/v1/competidores/{nit}",
-            headers=_headers(),
-            timeout=API_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json()
+        return _get_json(f"/v1/competidores/{_seg(nit)}", headers=_headers())
     except httpx.HTTPStatusError as e:
         return {"error": f"NIT {nit} no encontrado ({e.response.status_code})"}
     except Exception as e:
@@ -116,13 +127,7 @@ def get_perfil_competidor(nit: str) -> dict:
 
 def get_prediccion_competidores(id_proceso: str) -> dict:
     try:
-        r = httpx.get(
-            f"{API_BASE}/v1/competidores/prediccion/{id_proceso}",
-            headers=_headers(),
-            timeout=API_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json()
+        return _get_json(f"/v1/competidores/prediccion/{_seg(id_proceso)}", headers=_headers())
     except Exception as e:
         return {"error": str(e), "rivales_probables": []}
 
@@ -132,27 +137,14 @@ def get_entidades(q: Optional[str] = None, departamento: Optional[str] = None, p
     if q:            params["q"]            = q
     if departamento: params["departamento"] = departamento
     try:
-        r = httpx.get(
-            f"{API_BASE}/v1/entidades/",
-            params=params,
-            headers=_headers(),
-            timeout=API_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json()
+        return _get_json("/v1/entidades/", params=params, headers=_headers())
     except Exception as e:
         return {"error": str(e), "items": []}
 
 
 def get_detalle_entidad(nit_entidad: str) -> dict:
     try:
-        r = httpx.get(
-            f"{API_BASE}/v1/entidades/{nit_entidad}",
-            headers=_headers(),
-            timeout=API_TIMEOUT,
-        )
-        r.raise_for_status()
-        return r.json()
+        return _get_json(f"/v1/entidades/{_seg(nit_entidad)}", headers=_headers())
     except Exception as e:
         return {"error": str(e)}
 
@@ -160,8 +152,6 @@ def get_detalle_entidad(nit_entidad: str) -> dict:
 def check_salud_api() -> dict:
     """Verifica que la API central esté disponible."""
     try:
-        r = httpx.get(f"{API_BASE}/v1/health", timeout=5.0)
-        r.raise_for_status()
-        return r.json()
+        return _get_json("/v1/health", timeout=5.0)
     except Exception as e:
         return {"status": "offline", "error": str(e)}

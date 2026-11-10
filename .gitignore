@@ -20,6 +20,14 @@ data/
 
 # Licencias y claves — NUNCA subir al repo
 licencias/claves/privada.pem
+licencias/claves/*.pem
+!licencias/claves/publica.pem
+*.key
+*.p12
+*.pfx
+.smtp_secret
+.lic_cache
+.trial
 licencias/mi_licencia.lic
 licencias/licencias_generadas/
 *.lic
@@ -43,3 +51,17 @@ data/capturas/
 
 # Superpowers (repo externo clonado)
 superpowers/
+
+# Expedientes reales: documentos privados del proponente, no se suben al repo
+expedientes/*/*
+!expedientes/*/LEEME.txt
+expedientes/*/propuestas/
+
+# Configuracion local de herramientas (rutas y permisos personales) y secretos de Streamlit
+.claude/settings.local.json
+.streamlit/secrets.toml
+.env.*
+!.env.example
+
+# Registros del instalador
+construir_e_instalar_log.txt

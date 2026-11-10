@@ -95,15 +95,16 @@ fi
 # Instalar dependencias
 sudo -u "$APP_USER" "$VENV/pip" install --upgrade pip -q
 sudo -u "$APP_USER" "$VENV/pip" install \
-    fastapi==0.110.0 \
+    "fastapi>=0.162.2" \
+    "starlette>=1.3.1" \
     "uvicorn[standard]==0.29.0" \
     psycopg2-binary==2.9.9 \
     sqlalchemy==2.0.29 \
     alembic==1.13.1 \
-    python-dotenv==1.0.1 \
+    "python-dotenv>=1.2.2" \
     apscheduler==3.10.4 \
     httpx==0.27.0 \
-    pydantic==2.7.0 \
+    "pydantic>=2.9.0" \
     -q
 log "Dependencias instaladas"
 
@@ -223,7 +224,7 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo ""
 echo "  API URL:       https://$DOMAIN"
 echo "  Health check:  https://$DOMAIN/v1/health"
-echo "  Docs:          https://$DOMAIN/docs"
+echo "  (la documentación /docs está desactivada en producción)"
 echo ""
 echo "  DB Password:   $DB_PASS"
 echo "  API Secret:    $API_SECRET"

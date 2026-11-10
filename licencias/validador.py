@@ -7,9 +7,17 @@ import os, sys, json, hashlib, platform
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# La raíz del proyecto debe estar en sys.path para importar `seguridad` aunque
+# Streamlit se lance desde otra carpeta.
+_RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _RAIZ not in sys.path:
+    sys.path.insert(0, _RAIZ)
+
 
 def _data_dir() -> str:
     """A-1: Directorio de datos persistentes — funciona congelado (PyInstaller) y en desarrollo."""
+    if os.environ.get("LICITAPP_DATA_DIR"):
+        return os.environ["LICITAPP_DATA_DIR"]
     if getattr(sys, "frozen", False):
         # En .exe congelado: carpeta junto al ejecutable (tiene permisos de escritura)
         return os.path.join(os.path.dirname(sys.executable), "data")
@@ -33,8 +41,21 @@ def _write_log(msg: str):
         pass
 
 
-# Clave pública embebida
-_PUBLICA_PATH = os.path.join(os.path.dirname(__file__), "claves", "publica.pem")
+# Clave pública embebida en el código. El archivo claves/publica.pem se conserva solo
+# como referencia: si fuera la fuente de verdad, quien reemplace ese archivo podría
+# firmar sus propias licencias. Si rotas las claves, actualiza AMBOS (hay una prueba
+# que falla si no coinciden).
+_PUBLICA_PEM = b"""-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2F6HzFHb/Xx/AvMCvkpo
+gIuNXF7utKuJaEsajztUEwSgTwzAubq+J9fGZ7H8XZDc6UqDyBkOwuHu327rqLDr
+zCIAq5Mauv7+aGksEbLCb4GqUw0xqSZWqqAEjAnWugTklRs0iVCqH7dA1UUGJ+cI
+b6ImpOWeFTXs6bHUm7XWbjm5Q49yCvHNEhOtDkvcxihURQfa7mq23jT+us2hotTJ
+MN7giTU+JcUXJH/tFWUs6jZ3PARIyeoNuzGLdjUkAONLDK0nKqiATg+/+9lfCYWD
+tnj+BjugZbYVJyWaNj0YI49r9DEpYszxNqp5n9+JbC3qjcfBMVUVHmtcxyvvgzwI
+FwIDAQAB
+-----END PUBLIC KEY-----
+"""
+_PUBLICA_PATH = os.path.join(os.path.dirname(__file__), "claves", "publica.pem")  # solo referencia
 
 # Dónde busca la licencia el cliente
 LICENCIA_PATH = os.path.join(_app_dir(), "licencias", "mi_licencia.lic")
@@ -63,8 +84,7 @@ def _verificar_firma(licencia_json: str) -> dict:
     data = json.loads(licencia_json)
     payload = data["payload"]
     firma   = bytes.fromhex(data["firma"])
-    with open(_PUBLICA_PATH, "rb") as f:
-        publica = serialization.load_pem_public_key(f.read())
+    publica = serialization.load_pem_public_key(_PUBLICA_PEM)
     payload_bytes = json.dumps(payload, sort_keys=True).encode()
     publica.verify(firma, payload_bytes, padding.PKCS1v15(), hashes.SHA256())
     return payload
@@ -72,18 +92,24 @@ def _verificar_firma(licencia_json: str) -> dict:
 def _verificar_con_servidor(license_id: str, nit: str) -> dict:
     """Consulta el servidor. Retorna {'activo': bool, 'fecha_vencimiento': str}"""
     import urllib.request, urllib.parse
+    from seguridad import exigir_https, leer_limitado
+    exigir_https(SERVIDOR_URL)  # nunca consultar la licencia por http plano
     params = urllib.parse.urlencode({"license_id": license_id, "nit": nit, "machine": _machine_id()})
     url = f"{SERVIDOR_URL}?{params}"
     req = urllib.request.Request(url, headers={"User-Agent": "SECOPApp/1.0"})
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        return json.loads(resp.read().decode())
+    with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https validado arriba
+        datos = json.loads(leer_limitado(resp, 64 * 1024).decode())
+    if not isinstance(datos, dict):
+        raise ValueError("Respuesta del servidor de licencias no válida")
+    return datos
 
 def _leer_cache() -> dict:
     if not os.path.exists(CACHE_PATH):
         return {}
     try:
         with open(CACHE_PATH) as f:
-            return json.load(f)
+            datos = json.load(f)
+        return datos if isinstance(datos, dict) else {}
     except Exception:
         return {}
 
@@ -126,7 +152,17 @@ def validar_licencia(ruta_licencia: str = None) -> dict:
             "Solicita una nueva licencia a tu proveedor."
         )
 
-    # 3. Verificar fecha de vencimiento local
+    # 3. Verificar estructura y fecha de vencimiento local
+    try:
+        for campo in ("license_id", "nit", "nombre", "plan", "fecha_vencimiento"):
+            if not isinstance(payload[campo], str):
+                raise TypeError(campo)
+        datetime.strptime(payload["fecha_vencimiento"], "%Y-%m-%d")
+    except (KeyError, TypeError, ValueError):
+        raise LicenciaInvalida(
+            "El archivo de licencia es inválido o fue modificado.\n"
+            "Solicita una nueva licencia a tu proveedor."
+        )
     hoy = datetime.now().strftime("%Y-%m-%d")
     if payload["fecha_vencimiento"] < hoy:
         raise LicenciaInvalida(
@@ -154,12 +190,15 @@ def validar_licencia(ruta_licencia: str = None) -> dict:
     except Exception:
         ultimo_dt = datetime.min
 
+    # Un ultimo_check en el futuro (cache manipulada) obliga a consultar de nuevo.
+    if ultimo_dt > datetime.now() + timedelta(minutes=5):
+        ultimo_dt = datetime.min
     necesita_check = (datetime.now() - ultimo_dt) > timedelta(hours=24)
 
     if necesita_check:
         try:
             resp = _verificar_con_servidor(payload["license_id"], payload["nit"])
-            if not resp.get("activo", False):
+            if resp.get("activo") is not True:
                 # Limpiar cache y bloquear
                 _guardar_cache({})
                 raise LicenciaInvalida(

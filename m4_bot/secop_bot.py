@@ -12,13 +12,15 @@ Uso:
   resultado = bot.presentar_oferta(id_proceso="...", propuesta_economica=85_000_000, documentos={...})
 """
 
-import os, sys, json, time, logging
+import os, sys, json, re, time, logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import BOT_MODE, SECOP2_URL
+from seguridad import redactar
 
 logger = logging.getLogger("secop_bot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [BOT] %(levelname)s %(message)s")
@@ -28,6 +30,12 @@ SECOP2_BUSCAR  = "https://community.secop.gov.co/Public/Tendering/ContractNotice
 SECOP2_PROCESO = "https://community.secop.gov.co/Public/Tendering/ContractNoticeManagement/Index?currentLanguage=es-CO&Page=ContractNoticeDetails&SkinName=CCE&contractNoticeId={id_proceso}"
 
 ESTADOS_VALIDOS = {"CONVOCADO", "INVITACION_ABIERTA", "INVITACION ABIERTA", "PROCESO_ABIERTO"}
+
+MODOS_VALIDOS = ("dry_run", "real")
+_ID_PROCESO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,79}$")
+# Tipos de archivo que SECOP II acepta como soporte; cualquier otro no se sube.
+EXTENSIONES_DOCUMENTO = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".jpg", ".jpeg", ".png", ".zip", ".rar", ".7z"}
+MAX_DOCUMENTO_BYTES = 100 * 1024 * 1024
 
 
 class SecopBotError(Exception):
@@ -49,10 +57,12 @@ class SecopBot:
         self.usuario   = usuario
         self.contrasena = contrasena
         self.modo      = modo or BOT_MODE  # dry_run | real
+        # Un modo desconocido (p. ej. "dryrun") NO debe caer en envío real.
+        if self.modo not in MODOS_VALIDOS:
+            raise ValueError(f"Modo no válido: {self.modo!r}. Usa 'dry_run' o 'real'.")
         self.headless  = headless
-        self.capturas  = carpeta_capturas or os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "data", "capturas"
-        )
+        from config import DB_PATH as _db
+        self.capturas  = carpeta_capturas or os.path.join(os.path.dirname(_db), "capturas")
         os.makedirs(self.capturas, exist_ok=True)
         self._browser  = None
         self._page     = None
@@ -85,6 +95,8 @@ class SecopBot:
             pass
 
     def _registrar(self, msg: str, nivel: str = "INFO"):
+        # Las credenciales nunca llegan a logs, errores ni al JSON de resultado.
+        msg = redactar(msg, (self.contrasena, self.usuario))
         ts = datetime.now().strftime("%H:%M:%S")
         entrada = f"[{ts}] {msg}"
         self._log.append(entrada)
@@ -92,6 +104,7 @@ class SecopBot:
 
     def _captura(self, nombre: str) -> str:
         ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre = re.sub(r"[^A-Za-z0-9_\-]", "_", nombre)  # el nombre nunca lleva datos del usuario
         ruta = os.path.join(self.capturas, f"{ts}_{nombre}.png")
         try:
             self._page.screenshot(path=ruta, full_page=True)
@@ -105,9 +118,9 @@ class SecopBot:
         self._page.wait_for_selector(selector, state="visible", timeout=20_000)
         self._page.click(selector)
 
-    def _esperar_y_llenar(self, selector: str, valor: str, descripcion: str = ""):
+    def _esperar_y_llenar(self, selector: str, valor: str, descripcion: str = "", secreto: bool = False):
         pista = f"{selector} {descripcion}".lower()
-        visible = "••••" if any(m in pista for m in ("password", "contrase")) else str(valor)[:30]
+        visible = "••••" if secreto or any(m in pista for m in ("password", "contrase")) else str(valor)[:30]
         self._registrar(f"Llenar '{descripcion or selector}': {visible}")
         self._page.wait_for_selector(selector, state="visible")
         self._page.fill(selector, str(valor))
@@ -123,10 +136,10 @@ class SecopBot:
         # Llenar usuario
         try:
             self._esperar_y_llenar("input[name='username'], #username, input[type='text']",
-                                   self.usuario, "usuario")
+                                   self.usuario, "usuario", secreto=True)
             self._esperar_y_llenar("input[name='password'], #password, input[type='password']",
-                                   self.contrasena, "contraseña")
-            self._captura("02_login_credenciales")
+                                   self.contrasena, "contraseña", secreto=True)
+            # Sin captura aquí: la pantalla mostraría el usuario y la clave escritos.
             self._esperar_y_click("button[type='submit'], input[type='submit'], .login-btn, #btnLogin",
                                   "botón login")
             self._page.wait_for_load_state("networkidle")
@@ -150,7 +163,7 @@ class SecopBot:
         except SecopBotError:
             raise
         except Exception as e:
-            raise SecopBotError(f"Error durante login: {e}")
+            raise SecopBotError(redactar(f"Error durante login: {e}", (self.contrasena, self.usuario)))
 
     # ── Navegar al proceso ─────────────────────────────────────────────────────
 
@@ -159,7 +172,12 @@ class SecopBot:
         Navega al detalle de un proceso y extrae información básica.
         Retorna dict con: titulo, entidad, estado, presupuesto, fecha_cierre
         """
-        url = SECOP2_PROCESO.format(id_proceso=id_proceso)
+        id_proceso = str(id_proceso or "").strip()
+        if not _ID_PROCESO.match(id_proceso):
+            raise SecopBotError(
+                "El ID del proceso solo puede tener letras, números, punto, guion y guion bajo."
+            )
+        url = SECOP2_PROCESO.format(id_proceso=quote(id_proceso, safe=""))
         self._registrar(f"Navegando al proceso {id_proceso}")
         self._page.goto(url, wait_until="networkidle")
         time.sleep(2)
@@ -293,6 +311,8 @@ class SecopBot:
                 if not r or not os.path.exists(r):
                     self._registrar(f"Documento no encontrado: {r}", "WARNING")
                     continue
+                if not self._documento_permitido(r):
+                    continue
                 # Buscar input de archivo específico por label o nombre
                 selectores_doc = [
                     f"input[type='file'][name*='{nombre}']",
@@ -313,6 +333,20 @@ class SecopBot:
 
         self._captura("07_documentos_cargados")
         return cargados
+
+    def _documento_permitido(self, ruta: str) -> bool:
+        """Solo archivos de soporte normales: evita subir a SECOP un archivo cualquiera del equipo."""
+        p = Path(ruta)
+        if not p.is_file():
+            self._registrar(f"Documento omitido (no es un archivo): {p.name}", "WARNING")
+            return False
+        if p.suffix.lower() not in EXTENSIONES_DOCUMENTO:
+            self._registrar(f"Documento omitido (tipo {p.suffix or 'sin extensión'} no permitido): {p.name}", "WARNING")
+            return False
+        if p.stat().st_size > MAX_DOCUMENTO_BYTES:
+            self._registrar(f"Documento omitido (supera {MAX_DOCUMENTO_BYTES // (1024 * 1024)} MB): {p.name}", "WARNING")
+            return False
+        return True
 
     # ── Ingresar propuesta económica ──────────────────────────────────────────
 
@@ -503,7 +537,7 @@ class SecopBot:
             resultado["exito"] = envio.get("enviado", False) or envio.get("dry_run", False)
 
         except SecopBotError as e:
-            resultado["error"] = str(e)
+            resultado["error"] = redactar(str(e), (self.contrasena, self.usuario))
             resultado["exito"] = False
             self._registrar(f"Error controlado: {e}", "ERROR")
             try:
@@ -511,7 +545,7 @@ class SecopBot:
             except Exception:
                 pass
         except Exception as e:
-            resultado["error"] = f"Error inesperado: {e}"
+            resultado["error"] = redactar(f"Error inesperado: {e}", (self.contrasena, self.usuario))
             resultado["exito"] = False
             self._registrar(f"Error inesperado: {e}", "ERROR")
             try:
@@ -540,16 +574,19 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Bot SECOP II")
     parser.add_argument("--usuario",    required=True,  help="Usuario SECOP II")
-    parser.add_argument("--contrasena", required=True,  help="Contraseña SECOP II")
+    # La contraseña NO se recibe por argumento (quedaría en el historial y en la lista de procesos).
     parser.add_argument("--proceso",    required=True,  help="ID del proceso en SECOP II")
     parser.add_argument("--valor",      required=True,  type=float, help="Propuesta económica en COP")
     parser.add_argument("--modo",       default="dry_run", choices=["dry_run", "real"])
     parser.add_argument("--visible",    action="store_true", help="Mostrar ventana del navegador")
     args = parser.parse_args()
 
+    import getpass
+    contrasena_cli = getpass.getpass("Contraseña SECOP II (no se guarda): ")
+
     bot = SecopBot(
         usuario=args.usuario,
-        contrasena=args.contrasena,
+        contrasena=contrasena_cli,
         modo=args.modo,
         headless=not args.visible,
     )

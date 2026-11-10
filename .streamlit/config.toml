@@ -1,0 +1,18 @@
+# Configuración de seguridad de LicitApp (Streamlit lee este archivo desde la raíz del proyecto).
+[server]
+# Solo escucha en este equipo: nadie en la red local puede abrir la app ni usar tus credenciales.
+address = "127.0.0.1"
+port = 8501
+# Protección contra peticiones falsificadas desde otras páginas web.
+enableXsrfProtection = true
+enableCORS = true
+
+[client]
+# Oculta el botón "Deploy" y el menú de desarrollador.
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false
+
+[global]
+developmentMode = false

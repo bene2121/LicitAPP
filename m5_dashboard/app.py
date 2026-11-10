@@ -35,14 +35,20 @@ except ImportError as _imp_err:
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import DB_PATH
+from seguridad import esc_html, esc_md, nombre_archivo_seguro, guardar_perfil_json, cargar_perfil_json
 from m1_ingestor.entidades import ENTIDADES, es_entidad
 from m6_propuesta.armar import armar_propuesta
+from m6_propuesta.expediente import RAIZ_EXPEDIENTES, generar_paquete, leer_expediente, listar_expedientes
+from m7_competencia.historial_ofertas import estimar_ofertas
 from m7_competencia.investigar import investigar
 try:
+    from m2_formulas.comparar import diferencias_formulas
     from m2_formulas.optimizador import optimizar_todas
     _HAS_ENGINE = True
-except Exception:
+    _ERROR_ENGINE = ""
+except Exception as _e_engine:
     _HAS_ENGINE = False
+    _ERROR_ENGINE = f"{type(_e_engine).__name__}: {_e_engine}"
 
 try:
     from m3_filtrado.process_filter import get_oportunidades_top
@@ -50,9 +56,15 @@ try:
 except Exception:
     _HAS_FILTER = False
 
+_base_recursos = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_logo_icono = os.path.join(_base_recursos, "brand", "LicitAPP_icon.png")
+if not os.path.isfile(_logo_icono):
+    _logo_icono = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "brand", "LicitAPP_icon.png")
+_logo_completo = os.path.join(os.path.dirname(_logo_icono), "LicitAPP_logo.png")
+
 st.set_page_config(
-    page_title="SECOP Automatizador",
-    page_icon="🏗️",
+    page_title="LicitAPP",
+    page_icon=_logo_icono if os.path.isfile(_logo_icono) else "🏗️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -104,7 +116,15 @@ ESTADOS = [
 ]
 
 # DATA_DIR compatible con PyInstaller frozen exe
+def _multiselect(*args, **kwargs):
+    """Multiselect con el texto de ayuda en español."""
+    kwargs.setdefault("placeholder", "Elige una o varias opciones")
+    return st.multiselect(*args, **kwargs)
+
+
 def _get_data_dir():
+    if os.environ.get("LICITAPP_DATA_DIR"):
+        return os.environ["LICITAPP_DATA_DIR"]
     if getattr(sys, "frozen", False):
         return os.path.join(os.path.dirname(sys.executable), "data")
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -138,6 +158,7 @@ def _tabla_contratos(contratos):
     return [{
         "Contrato": c.get("id", ""),
         "Titular": c.get("titular") or c.get("proveedor", ""),
+        "Vía": {"propio": "Propio", "consorcio": "Por consorcio", "socio": "De un socio", "socio_consorcio": "Socio, en otro consorcio"}.get(c.get("via", ""), ""),
         "Entidad": c.get("entidad", ""),
         "Objeto": (c.get("objeto") or "")[:140],
         "Valor": fmt_cop(c.get("valor", 0)),
@@ -180,11 +201,26 @@ def cargar_procesos():
     return [], "vacio"
 
 
+SMTP_SECRETO_PATH = os.path.join(DATA_DIR, ".smtp_secret")
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _estimar_cache(consultas: tuple, po: float):
+    """Ofertas anteriores de los competidores (cacheado para no repetir consultas en cada rerun)."""
+    return estimar_ofertas(list(consultas), po)
+
+
+@st.cache_data(show_spinner=False)
+def _optimizar_cache(po: float, pts: float, precios: tuple):
+    return optimizar_todas(presupuesto_oficial=po, pts_max=pts, ofertas_historicas=list(precios))
+
+
 def cargar_perfil():
     if os.path.exists(PERFIL_PATH):
         try:
-            with open(PERFIL_PATH, encoding="utf-8") as f:
-                return json.load(f)
+            perfil = cargar_perfil_json(PERFIL_PATH, SMTP_SECRETO_PATH)
+            if perfil is not None:
+                return perfil
         except Exception:
             pass
     return {
@@ -232,10 +268,43 @@ def cargar_procesos_api(filtros: dict = None) -> tuple:
     return cargar_procesos()
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _secop_vivo(filtros: tuple):
+    """Procesos abiertos en SECOP II ahora (se refresca cada 3 minutos o con 'Actualizar ahora')."""
+    from m1_ingestor.vivo import buscar_en_vivo
+    from m7_competencia.investigar import _cliente_publico
+    cliente = st.session_state.get("_cliente_secop_pruebas") or _cliente_publico
+    datos = {k: (list(v) if isinstance(v, tuple) else v) for k, v in filtros}
+    return buscar_en_vivo(datos, cliente), datetime.now().strftime("%H:%M")
+
+
+def _actualizar_explorador():
+    """Fuerza una consulta nueva aunque los filtros coincidan con una ejecución anterior."""
+    st.session_state["explorador_revision"] = int(st.session_state.get("explorador_revision", 0)) + 1
+    _secop_vivo.clear()
+
+
+def _limpiar_filtros_explorador():
+    """Restablece valores explícitos para que el perfil no los repueble al rerun."""
+    valores = {
+        "usar_perfil_tog": False,
+        "deptos_sel_adv": [], "modal_sel_adv": [], "estado_sel_adv": [], "unspsc_sel_adv": [],
+        "mun_txt_adv": "", "ent_txt_adv": "", "texto_busq_adv": "",
+        "dias_max_adv": 90, "score_min_adv": 0, "fuente_sel_adv": "Ambas",
+        "rango_ppto": (0, 2_000_000_000),
+    }
+    for clave, valor in valores.items():
+        st.session_state[clave] = valor
+    _actualizar_explorador()
+
+
 def guardar_perfil(perfil):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(PERFIL_PATH, "w", encoding="utf-8") as f:
-        json.dump(perfil, f, ensure_ascii=False, indent=2)
+    """Guarda el perfil SIN contraseñas.
+
+    La clave de aplicación del correo va cifrada con la cuenta de Windows (DPAPI) en
+    un archivo aparte; si el sistema no puede cifrar, no se guarda en disco.
+    """
+    st.session_state["_smtp_cifrado"] = guardar_perfil_json(PERFIL_PATH, SMTP_SECRETO_PATH, perfil)
 
 
 # ── session_state defaults ────────────────────────────────────────────────────
@@ -249,10 +318,15 @@ if "tab_activo" not in st.session_state:
     st.session_state.tab_activo = 0
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.markdown(
-    "<h1 style='margin-bottom:0; color:#1F4E79;'>🏗️ SECOP Automatizador <span style='font-size:1rem;font-weight:400;'>— Obras Civiles</span></h1>",
-    unsafe_allow_html=True,
-)
+_encabezado_logo, _encabezado_texto = st.columns([1, 5], vertical_alignment="center")
+with _encabezado_logo:
+    if os.path.isfile(_logo_icono):
+        st.image(_logo_icono, width=105)
+    else:
+        st.markdown("# LicitAPP")
+with _encabezado_texto:
+    st.markdown("<h1 style='margin-bottom:0; color:#0B3266;'>LicitAPP</h1>", unsafe_allow_html=True)
+    st.caption("Ofertas públicas guiadas · Obras civiles · SECOP II")
 
 _dias_lic = _LICENCIA_INFO.get("dias_restantes", 0)
 _plan_lic = str(_LICENCIA_INFO.get("plan", "demo")).upper()
@@ -274,7 +348,8 @@ st.markdown("---")
 # ═══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "🚀 OFERTAR PASO A PASO",
     "🔍 EXPLORADOR",
     "🧮 CALCULADORA DE OFERTAS",
     "📁 MIS DOCUMENTOS",
@@ -285,6 +360,16 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "⚙️ MI CUENTA",
 ])
 
+with tab0:
+    from m5_dashboard.asistente_ui import render as _render_asistente
+    from m7_competencia.investigar import _cliente_publico as _cliente_secop
+    _render_asistente(
+        st.session_state.perfil, guardar_perfil,
+        st.session_state.get("_cliente_secop_pruebas") or _cliente_secop,  # pruebas inyectan un cliente falso
+        optimizar_todas if _HAS_ENGINE else None,
+        diferencias_formulas if _HAS_ENGINE else None,
+    )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 1 — EXPLORADOR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,28 +378,24 @@ with tab1:
     with st.sidebar:
         st.markdown("## 🔍 Filtros")
         perfil_filtros = st.session_state.perfil
-        usar_perfil = st.toggle("Aplicar filtros de mi perfil", value=True, key="usar_perfil_tog")
-        if st.button("🗑️ Limpiar todos los filtros", key="btn_limpiar"):
-            for k in ["deptos_sel_adv","modal_sel_adv","estado_sel_adv","unspsc_sel_adv",
-                      "mun_txt_adv","ent_txt_adv","texto_busq_adv","dias_max_adv",
-                      "score_min_adv","fuente_sel_adv"]:
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.rerun()
+        usar_perfil = st.toggle("Aplicar filtros de mi perfil", value=False, key="usar_perfil_tog",
+                                help="Actívalo únicamente si deseas cargar los filtros guardados en Mi cuenta.")
+        st.button("🗑️ Limpiar todos los filtros", key="btn_limpiar",
+                  on_click=_limpiar_filtros_explorador)
 
         texto_busq = st.text_input("🔍 Buscar objeto / entidad / ID",
                                    placeholder="pavimentación, IDU, CO1.BDOS...",
                                    key="texto_busq_adv")
 
         st.markdown("**📍 Geografía**")
-        deptos_sel = st.multiselect(
+        deptos_sel = _multiselect(
             "Departamento", DEPARTAMENTOS_CO, key="deptos_sel_adv",
             default=perfil_filtros.get("departamentos", []) if usar_perfil else [],
         )
         municipio_txt = st.text_input("Municipio", placeholder="Zipaquirá, Chía...", key="mun_txt_adv")
 
         st.markdown("**🏗️ Sector UNSPSC**")
-        unspsc_sel_labels = st.multiselect(
+        unspsc_sel_labels = _multiselect(
             "Sector / Código UNSPSC", list(UNSPSC_FAMILIAS.keys()),
             default=[k for k, v in UNSPSC_FAMILIAS.items()
                      if v in perfil_filtros.get("sectores_unspsc", [])] if usar_perfil else [],
@@ -323,8 +404,8 @@ with tab1:
         unspsc_codes = [UNSPSC_FAMILIAS[l] for l in unspsc_sel_labels]
 
         st.markdown("**📋 Proceso**")
-        modal_sel  = st.multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
-        estado_sel = st.multiselect(
+        modal_sel  = _multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
+        estado_sel = _multiselect(
             "Estado", ESTADOS, key="estado_sel_adv",
             default=["Presentación de oferta", "Fase de ofertas"] if usar_perfil else [],
         )
@@ -334,7 +415,7 @@ with tab1:
             horizontal=True,
             key="fuente_sel_adv",
         )
-        entidad_txt = st.text_input("Entidad contratante", placeholder="IDU, Gobernación...",
+        entidad_txt = st.text_input("Entidad contratante (nombre o sigla)", placeholder="Aerocivil, IDU, Gobernación...",
                                     key="ent_txt_adv")
 
         st.markdown("**💰 Presupuesto Oficial**")
@@ -346,7 +427,7 @@ with tab1:
             label_visibility="collapsed",
         )
         dias_max    = st.slider("Días máx. al cierre", 1, 180, 90, key="dias_max_adv")
-        score_min_f = st.slider("Score mínimo", 0, 100, 60, key="score_min_adv")
+        score_min_f = st.slider("Score mínimo", 0, 100, 0, key="score_min_adv")
 
     # Construir filtros para la API
     filtros_api = {}
@@ -383,7 +464,40 @@ with tab1:
     # Eliminar claves con valor None
     filtros_api = {k: v for k, v in filtros_api.items() if v is not None}
 
-    procesos_todos, origen = cargar_procesos_api(filtros_api)
+    _guardados = st.session_state.perfil.setdefault("procesos_guardados", [])
+    _vista = st.radio(
+        "Ver", ["🔴 En SECOP II ahora", f"⭐ Guardados ({len(_guardados)})"],
+        horizontal=True, key="vista_explorador", label_visibility="collapsed",
+    )
+    _ver_guardados = _vista.startswith("⭐")
+    if _ver_guardados:
+        procesos_todos, origen = list(_guardados), "guardados"
+    else:
+        _b1, _b2 = st.columns([1, 3])
+        _b1.button("🔄 Actualizar ahora", key="btn_actualizar_vivo", on_click=_actualizar_explorador)
+        if fuente_sel == "Ecopetrol":
+            filtros_api["nit_entidad"] = ENTIDADES["ECOPETROL"]["nit"]
+            filtros_api.pop("entidad", None)
+        elif fuente_sel == "Findeter":
+            filtros_api["nit_entidad"] = ENTIDADES["FINDETER"]["nit"]
+            filtros_api.pop("entidad", None)
+        try:
+            with st.spinner("Consultando SECOP II en vivo…"):
+                _clave = {k: v for k, v in filtros_api.items()
+                          if k in ("q", "entidad", "municipio", "nit_entidad", "po_min", "po_max", "dias_cierre_max")}
+                if not fuente_especial:
+                    _clave["departamentos"] = tuple(deptos_sel)
+                    _clave["unspsc"] = tuple(unspsc_codes)
+                _clave["modalidades"] = tuple(modal_sel)
+                _clave["revision"] = int(st.session_state.get("explorador_revision", 0))
+                procesos_todos, _hora = _secop_vivo(tuple(sorted(_clave.items())))
+            origen = "vivo"
+            _b2.caption(f"Datos en vivo de SECOP II · consultado {_hora} · "
+                        f"SECOP devolvió {len(procesos_todos)} procesos para esta consulta")
+        except Exception as _exc_vivo:
+            procesos_todos, origen = cargar_procesos()
+            st.warning(f"No se pudo consultar SECOP II ahora ({type(_exc_vivo).__name__}). "
+                       "Se muestra la última copia guardada en este equipo.")
 
     if fuente_especial:
         codigo_fuente = "ECOPETROL" if fuente_sel == "Ecopetrol" else "FINDETER"
@@ -402,7 +516,8 @@ with tab1:
         # texto
         if texto_busq:
             haystack = _normalizar(
-                f"{p.get('objeto','')} {p.get('titulo','')} {p.get('entidad','')} {p.get('id','')}"
+                f"{p.get('objeto','')} {p.get('titulo','')} {p.get('entidad','')} {p.get('id','')} "
+                f"{p.get('id_del_proceso','')} {p.get('referencia','')}"
             )
             if _normalizar(texto_busq) not in haystack:
                 continue
@@ -412,6 +527,12 @@ with tab1:
             and _departamento(p.get("departamento") or p.get("departamento_entidad"))
             not in [_departamento(d) for d in deptos_sel]
         ):
+            continue
+        if municipio_txt:
+            p_municipio = _normalizar(p.get("ciudad_unidad") or p.get("municipio") or p.get("ciudad_entidad") or "")
+            if _normalizar(municipio_txt) not in p_municipio:
+                continue
+        if entidad_txt and _normalizar(entidad_txt) not in _normalizar(p.get("entidad", "")):
             continue
         # modalidad
         if modal_sel:
@@ -441,6 +562,18 @@ with tab1:
         ):
             continue
         filtrados.append(p)
+
+    if _ver_guardados and not procesos_todos:
+        st.info("Todavía no has guardado procesos. En **En SECOP II ahora** pulsa ⭐ Guardar en los que quieras revisar después.")
+
+    _filtros_visibles = []
+    if deptos_sel: _filtros_visibles.append("Departamento: " + ", ".join(deptos_sel))
+    if municipio_txt: _filtros_visibles.append("Municipio: " + municipio_txt)
+    if entidad_txt: _filtros_visibles.append("Entidad: " + entidad_txt)
+    if modal_sel: _filtros_visibles.append("Modalidad: " + ", ".join(modal_sel))
+    if unspsc_codes: _filtros_visibles.append("UNSPSC: " + ", ".join(unspsc_codes))
+    if _filtros_visibles:
+        st.info("Filtros activos · " + " · ".join(_filtros_visibles))
 
     # ── Métricas superiores ───────────────────────────────────────────────────
     total_po = sum(float(p.get("presupuesto_oficial", 0) or 0) for p in filtrados)
@@ -495,23 +628,52 @@ with tab1:
         st.markdown("<hr style='margin:2px 0 8px 0'>", unsafe_allow_html=True)
 
         for i, row in enumerate(rows):
+            _proceso_fila = next((p for p in filtrados if str(p.get("id") or p.get("id_del_proceso", "")) == str(row["_id"])), {})
             score = row["Score 🎯"]
             color = "#28a745" if score >= 75 else ("#fd7e14" if score >= 50 else "#dc3545")
 
             c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1, 2, 3, 2, 2, 1, 1, 2])
             c1.markdown(
-                f"<div class='score-bar-wrap'><span class='score-num' style='color:{color}'>{score}</span></div>",
+                f"<div class='score-bar-wrap'><span class='score-num' style='color:{color}'>{int(score)}</span></div>",
                 unsafe_allow_html=True,
             )
             c1.progress(score / 100)
-            c2.markdown(f"<small>{row['Entidad']}</small>", unsafe_allow_html=True)
-            c3.markdown(f"<small>{row['Objeto']}</small>", unsafe_allow_html=True)
-            c4.markdown(f"<small>{row['Modalidad']}</small>", unsafe_allow_html=True)
-            c5.markdown(f"<small>**{row['P.O. (COP)']}**</small>", unsafe_allow_html=True)
-            c6.markdown(f"<small>{row['Cierre']}</small>", unsafe_allow_html=True)
+            # Datos remotos (SECOP): se escapan antes de insertarlos como HTML.
+            c2.markdown(f"<small>{esc_html(row['Entidad'])}</small>", unsafe_allow_html=True)
+            c3.markdown(f"<small>{esc_html(row['Objeto'])}</small>", unsafe_allow_html=True)
+            c4.markdown(f"<small>{esc_html(row['Modalidad'])}</small>", unsafe_allow_html=True)
+            c5.markdown(f"<small><b>{esc_html(row['P.O. (COP)'])}</b></small>", unsafe_allow_html=True)
+            c6.markdown(f"<small>{esc_html(row['Cierre'])}</small>", unsafe_allow_html=True)
             dias_v = row["Días"]
             dias_color = "red" if isinstance(dias_v, int) and dias_v <= 5 else "inherit"
-            c7.markdown(f"<small style='color:{dias_color};font-weight:600'>{dias_v}</small>", unsafe_allow_html=True)
+            c7.markdown(f"<small style='color:{dias_color};font-weight:600'>{esc_html(dias_v)}</small>", unsafe_allow_html=True)
+            if _proceso_fila.get("url_proceso"):
+                c8.link_button("🔗 Ver en SECOP II", _proceso_fila["url_proceso"], width="stretch")
+            _ids_guardados = {str(g.get("id") or g.get("id_del_proceso")) for g in st.session_state.perfil.get("procesos_guardados", [])}
+            if str(row["_id"]) in _ids_guardados:
+                if c8.button("✖ Quitar de guardados", key=f"btn_quitar_{i}_{row['_id']}"):
+                    st.session_state.perfil["procesos_guardados"] = [
+                        g for g in st.session_state.perfil.get("procesos_guardados", [])
+                        if str(g.get("id") or g.get("id_del_proceso")) != str(row["_id"])]
+                    guardar_perfil(st.session_state.perfil)
+                    st.rerun()
+            elif c8.button("⭐ Guardar", key=f"btn_guardar_{i}_{row['_id']}"):
+                from m7_competencia.entidad import analizar_entidad, guardar_dossier
+                from m7_competencia.investigar import _cliente_publico
+                _cliente_hist = st.session_state.get("_cliente_secop_pruebas") or _cliente_publico
+                try:
+                    with st.spinner("Guardando expediente y analizando dos años de competencia…"):
+                        _analisis = analizar_entidad(_proceso_fila, _cliente_hist, anos=2, filtrar_contexto=True)
+                except Exception as _exc_analisis:
+                    _analisis = {"error": str(_exc_analisis), "oferentes": [], "adjudicatarios": []}
+                _carpeta_dossier = guardar_dossier(_proceso_fila, _analisis, RAIZ_EXPEDIENTES)
+                _copia = {k: v for k, v in _proceso_fila.items() if isinstance(v, (str, int, float, bool, type(None)))}
+                _copia["guardado_el"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                _copia["carpeta_dossier"] = str(_carpeta_dossier)
+                st.session_state.perfil.setdefault("procesos_guardados", []).append(_copia)
+                guardar_perfil(st.session_state.perfil)
+                st.session_state[f"analisis_explorador_{row['_id']}"] = _analisis
+                st.rerun()
             if c8.button("📋 Preparar oferta", key=f"btn_prep_{i}_{row['_id']}"):
                 # Encontrar el proceso completo y guardarlo en session_state
                 for p in filtrados:
@@ -519,9 +681,87 @@ with tab1:
                         st.session_state.proceso_seleccionado = p
                         break
                 st.info(
-                    f"✅ Proceso seleccionado: **{row['Objeto']}**. "
+                    f"✅ Proceso seleccionado: **{esc_md(row['Objeto'])}**. "
                     "Calcula el precio en **🧮 CALCULADORA** y ármala en **📄 PROPUESTA**."
                 )
+
+            _analisis_key = f"analisis_explorador_{row['_id']}"
+            with st.expander(f"🔎 Ver detalle y competencia · {row['_id']}",
+                             expanded=_analisis_key in st.session_state):
+                _objeto_completo = _proceso_fila.get("objeto") or _proceso_fila.get("titulo") or "Sin descripción publicada"
+                st.markdown(f"**Objeto completo:** {esc_html(_objeto_completo)}")
+                dc1, dc2, dc3, dc4 = st.columns(4)
+                dc1.metric("Entidad", str(_proceso_fila.get("entidad") or "—")[:28])
+                dc2.metric("Presupuesto", fmt_cop(_proceso_fila.get("presupuesto_oficial", 0)))
+                dc3.metric("Modalidad", str(_proceso_fila.get("modalidad") or "—")[:25])
+                dc4.metric("UNSPSC", str(_proceso_fila.get("unspsc") or "—"))
+                st.caption(f"Referencia: {_proceso_fila.get('referencia') or row['_id']} · "
+                           f"Cierre: {row['Cierre']} · Estado: {_proceso_fila.get('estado') or '—'}")
+                if _proceso_fila.get("url_proceso"):
+                    st.link_button("Abrir expediente completo y documentos en SECOP II", _proceso_fila["url_proceso"],
+                                   key=f"link_detalle_{i}_{row['_id']}")
+                if st.button("Analizar entidad, modalidad y sector — últimos 2 años",
+                             key=f"btn_analizar_ent_{i}_{row['_id']}"):
+                    from m7_competencia.entidad import analizar_entidad
+                    from m7_competencia.investigar import _cliente_publico
+                    try:
+                        with st.spinner("Buscando oferentes, adjudicatarios y precios publicados…"):
+                            st.session_state[_analisis_key] = analizar_entidad(
+                                _proceso_fila, st.session_state.get("_cliente_secop_pruebas") or _cliente_publico,
+                                anos=2, filtrar_contexto=True)
+                        st.toast("Análisis de competencia terminado")
+                    except Exception as _exc_hist:
+                        st.error(f"No fue posible completar el análisis: {_exc_hist}")
+                _hist = st.session_state.get(_analisis_key)
+                if _hist:
+                    if _hist.get("error"):
+                        st.warning(_hist["error"])
+                    else:
+                        ac1, ac2, ac3, ac4 = st.columns(4)
+                        ac1.metric("Procesos comparables", _hist.get("procesos_contexto", 0))
+                        ac2.metric("Ofertas", _hist.get("ofertas", 0))
+                        ac3.metric("Oferentes", _hist.get("oferentes_unicos", 0))
+                        ac4.metric("Contratos", _hist.get("contratos", 0))
+                        st.caption(f"Periodo: {_hist.get('desde')} a {_hist.get('hasta')} · "
+                                   f"Comparación usada: {_hist.get('nivel_comparacion', 'entidad')} · "
+                                   f"Cobertura: {_hist.get('procesos_contexto', 0)} procesos publicados.")
+                        if _hist.get("nivel_comparacion") != "misma modalidad y familia UNSPSC":
+                            st.warning("La cohorte exacta no tenía muestra suficiente. LicitAPP amplió la búsqueda a: "
+                                       + str(_hist.get("nivel_comparacion", "historial de la entidad")) + ".")
+                        if _hist.get("oferentes"):
+                            st.markdown("**Quiénes se presentan y cómo ofertan**")
+                            st.dataframe([{
+                                "Oferente": x["nombre"], "NIT": x["nit"], "Ofertas": x["ofertas"],
+                                "Adjudicaciones": x["adjudicaciones"],
+                                "Promedio bajo P.O.": (f"{x['descuento_promedio']:.2f} %"
+                                                       if x.get("descuento_promedio") is not None else "Sin P.O. comparable"),
+                            } for x in _hist["oferentes"]], hide_index=True, width="stretch")
+                        else:
+                            st.info("No se encontraron ofertas publicadas comparables en los últimos dos años.")
+                        if _hist.get("adjudicatarios"):
+                            st.markdown("**Quiénes recibieron contratos comparables**")
+                            st.dataframe([{
+                                "Adjudicatario": x["nombre"], "Contratos": x["contratos"],
+                                "Valor contratado": fmt_cop(x["valor"]), "Como consorcio/grupo": x["grupos"],
+                            } for x in _hist["adjudicatarios"]], hide_index=True, width="stretch")
+
+                _guardado = next((g for g in st.session_state.perfil.get("procesos_guardados", [])
+                                  if str(g.get("id") or g.get("id_del_proceso")) == str(row["_id"])), None)
+                if _guardado and _guardado.get("carpeta_dossier"):
+                    st.success(f"Expediente local: `{_guardado['carpeta_dossier']}`")
+                    _docs_subidos = st.file_uploader(
+                        "Incorporar documentos descargados de SECOP al expediente",
+                        accept_multiple_files=True, key=f"docs_explorador_{i}_{row['_id']}")
+                    if _docs_subidos:
+                        from seguridad import nombre_archivo_seguro, ruta_dentro_de
+                        from pathlib import Path as _Path
+                        _destino_docs = _Path(_guardado["carpeta_dossier"]) / "0. Documentos SECOP"
+                        for _archivo_doc in _docs_subidos:
+                            _nombre_doc = nombre_archivo_seguro(_Path(_archivo_doc.name).stem, largo=90) + _Path(_archivo_doc.name).suffix.lower()
+                            _ruta_doc = _destino_docs / _nombre_doc
+                            if ruta_dentro_de(_destino_docs, _ruta_doc) and not _ruta_doc.exists():
+                                _ruta_doc.write_bytes(_archivo_doc.getvalue())
+                        st.success("Documentos incorporados al expediente local.")
 
             st.markdown("<hr style='margin:2px 0 6px 0; opacity:0.2'>", unsafe_allow_html=True)
 
@@ -555,10 +795,19 @@ with tab2:
             value=1000, step=50,
         )
     with col_inp3:
-        st.caption("El cálculo usa solo las ofertas reales que escribas abajo.")
+        st.caption("Las cinco fórmulas se calculan aparte y se comparan entre sí.")
+
+    st.markdown("**Competidores (NIT o nombre, uno por línea)**")
+    competidores_calc = st.text_area(
+        "Para estimar cómo han ofertado antes",
+        placeholder="900642880\nCONSORCIO VÍAS DEL SUR",
+        key="competidores_calc",
+        height=80,
+        label_visibility="collapsed",
+    )
 
     # Tabla de ofertas rivales
-    st.markdown("**Ofertas reales de rivales** *(al menos una)*")
+    st.markdown("**Ofertas de este proceso, si ya las conoces**")
     rivales_df_init = pd.DataFrame(
         [{"Rival": f"Rival {i+1}", "Precio (COP)": 0} for i in range(5)]
     )
@@ -574,6 +823,12 @@ with tab2:
         if float(r["Precio (COP)"] or 0) > 0
     ]
 
+    st.checkbox(
+        "Incluir ofertas atípicas (bajo el 50 % o sobre el presupuesto)",
+        key="incluir_atipicas",
+        help="En SECOP hay ofertas digitadas con un cero de menos o por encima del presupuesto.",
+    )
+
     # Nota informativa fórmulas
     st.info(
         "📌 **¿Cómo se elige la fórmula en Colombia?**  \n"
@@ -584,11 +839,50 @@ with tab2:
     )
 
     if st.button("⚡ Calcular las 5 Fórmulas", type="primary"):
+        st.session_state["calc_pedido"] = True
+    if st.session_state.get("calc_pedido"):
         if not _HAS_ENGINE:
-            st.error("Motor de fórmulas no disponible. Verifica la instalación del módulo m2_formulas.")
-        elif not ofertas_rivales_vals:
-            st.error("Ingresa al menos una oferta real de rival. No se inventan precios.")
+            st.error(f"Motor de fórmulas no disponible ({_ERROR_ENGINE}). Reinstala LicitApp.")
         else:
+            consultas_comp = [linea.strip() for linea in competidores_calc.splitlines() if linea.strip()]
+            guia_comp = None
+            if consultas_comp:
+                try:
+                    with st.spinner("Revisando ofertas anteriores de los competidores…"):
+                        guia_comp = _estimar_cache(tuple(consultas_comp), float(po_calc))
+                except ValueError as exc_guia:
+                    st.error(str(exc_guia))
+            if guia_comp and guia_comp["competidores"]:
+                st.markdown("**Cómo han ofertado antes**")
+                st.dataframe(
+                    [{
+                        "Competidor": f["nombre"],
+                        "Ofertas": f["ofertas"],
+                        "Con presupuesto": f["con_presupuesto"],
+                        "Descuento mediano": (
+                            f"{f['descuento_mediano'] * 100:.1f} %"
+                            if f["descuento_mediano"] is not None and f["con_presupuesto"] else "—"
+                        ),
+                        "Rango": (
+                            f"{f['descuento_bajo'] * 100:.1f} % a {f['descuento_alto'] * 100:.1f} %"
+                            if f["con_presupuesto"] else "—"
+                        ),
+                        "Precio guía": fmt_cop(f["precio_guia"]) if f["precio_guia"] else "—",
+                        "Nota": f["nota"],
+                    } for f in guia_comp["competidores"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            precios_para_calculo = ofertas_rivales_vals or (guia_comp["precios_guia"] if guia_comp else [])
+            _po = float(po_calc or 0)
+            _atipicas = [v for v in precios_para_calculo if _po > 0 and (v < _po * 0.5 or v > _po)]
+            if _atipicas and not st.session_state.get("incluir_atipicas"):
+                precios_para_calculo = [v for v in precios_para_calculo if v not in _atipicas]
+                st.warning(
+                    "Se dejaron fuera " + str(len(_atipicas)) + " ofertas atípicas (bajo el 50 % o sobre el "
+                    "presupuesto): " + ", ".join(fmt_cop(v) for v in _atipicas)
+                    + ". Marca **Incluir ofertas atípicas** si quieres usarlas."
+                )
             formulas_info = {
                 "M":   {"nombre": "Mediana",               "riesgo": "Medio"},
                 "MG":  {"nombre": "Media Geométrica",      "riesgo": "Medio"},
@@ -596,141 +890,204 @@ with tab2:
                 "MAA": {"nombre": "Media Aritmética Alta", "riesgo": "Bajo"},
                 "MV":  {"nombre": "Menor Valor",           "riesgo": "Alto"},
             }
-            try:
-                with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
-                    resultados_por_formula = optimizar_todas(
-                        presupuesto_oficial=float(po_calc),
-                        pts_max=float(pts_max_calc),
-                        ofertas_historicas=ofertas_rivales_vals,
-                    )
-            except ValueError as exc:
-                st.error(str(exc))
+            if not precios_para_calculo:
+                st.warning(
+                    "No hay precios de competidores. Sin esos valores las fórmulas M, MG, MAB y MAA no producen "
+                    "un precio óptimo distinto: dependen de las ofertas que finalmente presente el mercado. "
+                    "Aun así puedes preparar y guardar tu oferta con tu presupuesto sostenible."
+                )
                 resultados_por_formula = None
-
-            if resultados_por_formula:
-                st.markdown("---")
-                st.markdown("### Comparativa de las 5 Fórmulas")
-
-                # Tabla comparativa
-                tabla_rows = []
-                for cod, fi in formulas_info.items():
-                    r = resultados_por_formula[cod]
-                    precio = r["oferta_optima"]
-                    pct = r["pct_mejora"] * 100
-                    puntaje = r["scores"][cod]
-                    tabla_rows.append({
-                        "Fórmula": cod,
-                        "Nombre": fi["nombre"],
-                        "Precio Sugerido": precio,
-                        "% Mejora P.O.": pct,
-                        "Puntaje Esperado": puntaje,
-                        "/ Máx.": pts_max_calc,
-                        "Riesgo": fi["riesgo"],
-                    })
-
-                # Mostrar tabla con radio buttons
-                col_radio_sel = st.radio(
-                    "Seleccionar fórmula:",
-                    options=[r["Fórmula"] for r in tabla_rows],
-                    format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
-                    horizontal=True,
-                    key="formula_radio",
-                )
-
-                # Header tabla
-                th = st.columns([1, 2, 2, 1, 2, 1])
-                for c, h in zip(th, ["Fórmula", "Nombre", "Precio Sugerido", "% Mejora", "Puntaje", "Riesgo"]):
-                    c.markdown(f"**{h}**")
-                st.markdown("<hr style='margin:2px 0 6px 0'>", unsafe_allow_html=True)
-
-                for row in tabla_rows:
-                    riesgo_color = {"Alto": "#dc3545", "Medio": "#fd7e14", "Bajo": "#28a745"}.get(row["Riesgo"], "#333")
-                    sel = "✅" if row["Fórmula"] == col_radio_sel else "⭕"
-                    tc1, tc2, tc3, tc4, tc5, tc6 = st.columns([1, 2, 2, 1, 2, 1])
-                    tc1.markdown(f"**{sel} {row['Fórmula']}**")
-                    tc2.write(row["Nombre"])
-                    tc3.markdown(f"**{fmt_cop(row['Precio Sugerido'])}**")
-                    tc4.write(f"{row['% Mejora P.O.']:.1f}%")
-                    pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
-                    tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
-                    tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{row['Riesgo']}</span>", unsafe_allow_html=True)
-                    st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
-
-                # Campo "Mi precio final" editable
-                selected_precio = resultados_por_formula[col_radio_sel]["oferta_optima"]
-                st.markdown("---")
-                col_f1, col_f2 = st.columns([2, 1])
-                with col_f1:
-                    mi_precio_final = st.number_input(
-                        f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
-                        min_value=1_000_000, max_value=int(po_calc),
-                        value=int(selected_precio), step=100_000, format="%d",
-                        key="mi_precio_final",
-                    )
-                with col_f2:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("✅ Usar esta oferta", type="primary"):
-                        oferta_info = {
-                            "formula": col_radio_sel,
-                            "nombre_formula": formulas_info[col_radio_sel]["nombre"],
-                            "precio": mi_precio_final,
-                            "presupuesto_oficial": po_calc,
-                            "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
-                            "fecha": datetime.now().isoformat(),
-                            "proceso": (
-                                (proc_sel.get("id") or proc_sel.get("id_del_proceso", ""))
-                                if proc_sel else ""
-                            ),
-                        }
-                        st.session_state.oferta_guardada = oferta_info
-                        # Guardar en historial del perfil
-                        perfil = st.session_state.perfil
-                        perfil.setdefault("historial_ofertas", []).append(oferta_info)
-                        guardar_perfil(perfil)
-                        st.success(
-                            f"✅ Oferta guardada: **{fmt_cop(mi_precio_final)}** "
-                            f"con fórmula **{col_radio_sel}** ({formulas_info[col_radio_sel]['nombre']})"
+                _precio_sostenible = st.number_input(
+                    "Precio calculado con tus costos, AIU, impuestos y utilidad (COP)", min_value=1_000_000,
+                    max_value=max(int(po_calc), 1_000_000), value=max(int(po_calc), 1_000_000), step=100_000,
+                    key="precio_sin_competidores")
+                _formula_sin_datos = st.selectbox(
+                    "Fórmula indicada en el pliego",
+                    list(formulas_info), format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
+                    key="formula_sin_competidores")
+                st.dataframe([{
+                    "Fórmula": cod, "Nombre": info["nombre"], "Precio de trabajo": fmt_cop(_precio_sostenible),
+                    "Interpretación": ("Menor valor favorece el precio válido más bajo, sujeto a costos."
+                                       if cod == "MV" else "No se puede optimizar sin conocer las demás ofertas."),
+                } for cod, info in formulas_info.items()], hide_index=True, width="stretch")
+                if st.button("✅ Usar esta oferta sin precios rivales", type="primary", key="usar_sin_competidores"):
+                    oferta_info = {
+                        "formula": _formula_sin_datos, "nombre_formula": formulas_info[_formula_sin_datos]["nombre"],
+                        "precio": float(_precio_sostenible), "presupuesto_oficial": float(po_calc),
+                        "pct_mejora": (float(po_calc) - float(_precio_sostenible)) / float(po_calc) if po_calc else 0,
+                        "fuente": "costos propios; sin precios de competidores",
+                    }
+                    st.session_state.oferta_guardada = oferta_info
+                    perfil_calc = st.session_state.perfil
+                    perfil_calc.setdefault("historial_ofertas", []).append(oferta_info)
+                    guardar_perfil(perfil_calc)
+                    st.success("Oferta guardada. Las fórmulas se recalcularán si después agregas precios reales.")
+            else:
+                try:
+                    with st.spinner("Calculando ofertas óptimas para las 5 fórmulas…"):
+                        resultados_por_formula = _optimizar_cache(
+                            float(po_calc), float(pts_max_calc), tuple(precios_para_calculo),
                         )
+                        if not ofertas_rivales_vals:
+                            st.caption(
+                                "Las cinco fórmulas usan los precios guía de ofertas anteriores, "
+                                "no ofertas presentadas en este proceso."
+                            )
+                except ValueError as exc:
+                    st.error(str(exc))
+                    resultados_por_formula = None
 
-                # Gráfico comparativo de puntajes
-                st.markdown("---")
-                st.markdown("### 📊 Comparativa de Puntajes por Fórmula")
+                if resultados_por_formula:
+                    st.markdown("---")
+                    st.markdown("### Comparativa de las 5 Fórmulas")
 
-                fig_bar = go.Figure()
-                colores_formula = {
-                    "M": "#1F4E79", "MG": "#28a745", "MAB": "#fd7e14",
-                    "MAA": "#6f42c1", "MV": "#dc3545",
-                }
-                puntajes_lista = [resultados_por_formula[c]["scores"][c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
-                nombres_lista = [formulas_info[c]["nombre"] for c in ["M", "MG", "MAB", "MAA", "MV"]]
-                colores_lista = [colores_formula[c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                    # Tabla comparativa
+                    tabla_rows = []
+                    for cod, fi in formulas_info.items():
+                        r = resultados_por_formula[cod]
+                        precio = r["oferta_optima"]
+                        pct = r["pct_mejora"] * 100
+                        puntaje = r["scores"][cod]
+                        tabla_rows.append({
+                            "Fórmula": cod,
+                            "Nombre": fi["nombre"],
+                            "Precio Sugerido": precio,
+                            "% Mejora P.O.": pct,
+                            "Puntaje Esperado": puntaje,
+                            "/ Máx.": pts_max_calc,
+                            "Riesgo": fi["riesgo"],
+                        })
 
-                fig_bar.add_trace(go.Bar(
-                    y=nombres_lista,
-                    x=puntajes_lista,
-                    orientation="h",
-                    marker_color=colores_lista,
-                    text=[f"{p:.0f}" for p in puntajes_lista],
-                    textposition="outside",
-                ))
-                fig_bar.update_layout(
-                    xaxis_title="Puntaje", xaxis_range=[0, pts_max_calc * 1.1],
-                    height=320, margin=dict(l=10, r=40, t=20, b=20),
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                    # Mostrar tabla con radio buttons
+                    col_radio_sel = st.radio(
+                        "Seleccionar fórmula:",
+                        options=[r["Fórmula"] for r in tabla_rows],
+                        format_func=lambda x: f"{x} — {formulas_info[x]['nombre']}",
+                        horizontal=True,
+                        key="formula_radio",
+                    )
 
-                # Explicación de fórmulas
-                with st.expander("ℹ️ ¿Cuándo se usa cada fórmula en Colombia?"):
-                    st.markdown("""
-| Fórmula | Cuándo se usa |
-|---------|---------------|
-| **M — Mediana** | Licitaciones con múltiples oferentes; penaliza valores extremos. Equilibrada. |
-| **MG — Media Geométrica** | Similar a la Mediana; favorece precios competitivos pero no extremos. |
-| **MAB — M.A. Baja** | Usada cuando la entidad quiere incentivar precios bajos. Mayor riesgo de dumping. |
-| **MAA — M.A. Alta** | Penaliza fuertemente a quien oferte por encima de la media alta. Favorece calidad. |
-| **MV — Menor Valor** | El precio más bajo obtiene el máximo puntaje. Alto riesgo: requiere solidez financiera. |
-""")
+                    # Header tabla
+                    th = st.columns([1, 2, 2, 1, 2, 1])
+                    for c, h in zip(th, ["Fórmula", "Nombre", "Precio Sugerido", "% Mejora", "Puntaje", "Riesgo"]):
+                        c.markdown(f"**{h}**")
+                    st.markdown("<hr style='margin:2px 0 6px 0'>", unsafe_allow_html=True)
+
+                    for row in tabla_rows:
+                        riesgo_color = {"Alto": "#dc3545", "Medio": "#fd7e14", "Bajo": "#28a745"}.get(row["Riesgo"], "#333")
+                        sel = "✅" if row["Fórmula"] == col_radio_sel else "⭕"
+                        tc1, tc2, tc3, tc4, tc5, tc6 = st.columns([1, 2, 2, 1, 2, 1])
+                        tc1.markdown(f"**{sel} {row['Fórmula']}**")
+                        tc2.write(row["Nombre"])
+                        tc3.markdown(f"**{fmt_cop(row['Precio Sugerido'])}**")
+                        tc4.write(f"{row['% Mejora P.O.']:.1f}%")
+                        pct_pts = row["Puntaje Esperado"] / row["/ Máx."]
+                        tc5.progress(min(1.0, pct_pts), text=f"{row['Puntaje Esperado']:.0f}/{row['/ Máx.']}")
+                        tc6.markdown(f"<span style='color:{riesgo_color};font-weight:600'>{esc_html(row['Riesgo'])}</span>", unsafe_allow_html=True)
+                        st.markdown("<hr style='margin:2px 0 4px 0; opacity:0.15'>", unsafe_allow_html=True)
+
+                    diffs = diferencias_formulas(resultados_por_formula)
+                    st.markdown("### Cada fórmula, por separado")
+                    pestanas = st.tabs([f"{f['formula']} — {formulas_info[f['formula']]['nombre']}" for f in diffs])
+                    for pestana, fila in zip(pestanas, diffs):
+                        with pestana:
+                            d1, d2, d3 = st.columns(3)
+                            d1.metric("Precio sugerido", fmt_cop(fila["precio"]))
+                            d2.metric("Puntaje", f"{fila['puntaje']:.1f}")
+                            d3.metric("Bajo el presupuesto", f"{fila['pct_mejora'] * 100:.1f} %")
+                            st.write(
+                                f"Frente a la fórmula más baja: **{fmt_cop(fila['dif_vs_mas_baja'])}**. "
+                                f"Frente a menor valor: **{fmt_cop(fila['dif_vs_mv'])}**. "
+                                f"Frente al promedio de las cinco: **{fmt_cop(fila['dif_vs_promedio'])}**."
+                            )
+                    st.markdown("**Diferencias de precio entre las cinco**")
+                    st.dataframe(
+                        [{
+                            "Fórmula": f["formula"],
+                            "Precio": fmt_cop(f["precio"]),
+                            "Vs. la más baja": fmt_cop(f["dif_vs_mas_baja"]),
+                            "Vs. menor valor": fmt_cop(f["dif_vs_mv"]),
+                            "Vs. promedio": fmt_cop(f["dif_vs_promedio"]),
+                        } for f in diffs],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    # Campo "Mi precio final" editable
+                    selected_precio = resultados_por_formula[col_radio_sel]["oferta_optima"]
+                    st.markdown("---")
+                    col_f1, col_f2 = st.columns([2, 1])
+                    with col_f1:
+                        mi_precio_final = st.number_input(
+                            f"✏️ Mi precio final para fórmula **{col_radio_sel}** (COP)",
+                            min_value=1_000_000, max_value=int(po_calc),
+                            value=int(selected_precio), step=100_000, format="%d",
+                            key=f"mi_precio_final_{col_radio_sel}_{int(selected_precio)}",
+                        )
+                    with col_f2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("✅ Usar esta oferta", type="primary"):
+                            oferta_info = {
+                                "formula": col_radio_sel,
+                                "nombre_formula": formulas_info[col_radio_sel]["nombre"],
+                                "precio": mi_precio_final,
+                                "presupuesto_oficial": po_calc,
+                                "pct_mejora": (po_calc - mi_precio_final) / po_calc * 100,
+                                "fecha": datetime.now().isoformat(),
+                                "proceso": (
+                                    (proc_sel.get("id") or proc_sel.get("id_del_proceso", ""))
+                                    if proc_sel else ""
+                                ),
+                            }
+                            st.session_state.oferta_guardada = oferta_info
+                            # Guardar en historial del perfil
+                            perfil = st.session_state.perfil
+                            perfil.setdefault("historial_ofertas", []).append(oferta_info)
+                            guardar_perfil(perfil)
+                            st.success(
+                                f"✅ Oferta guardada: **{fmt_cop(mi_precio_final)}** "
+                                f"con fórmula **{col_radio_sel}** ({formulas_info[col_radio_sel]['nombre']})"
+                            )
+
+                    # Gráfico comparativo de puntajes
+                    st.markdown("---")
+                    st.markdown("### 📊 Comparativa de Puntajes por Fórmula")
+
+                    fig_bar = go.Figure()
+                    colores_formula = {
+                        "M": "#1F4E79", "MG": "#28a745", "MAB": "#fd7e14",
+                        "MAA": "#6f42c1", "MV": "#dc3545",
+                    }
+                    puntajes_lista = [resultados_por_formula[c]["scores"][c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                    nombres_lista = [formulas_info[c]["nombre"] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+                    colores_lista = [colores_formula[c] for c in ["M", "MG", "MAB", "MAA", "MV"]]
+
+                    fig_bar.add_trace(go.Bar(
+                        y=nombres_lista,
+                        x=puntajes_lista,
+                        orientation="h",
+                        marker_color=colores_lista,
+                        text=[f"{p:.0f}" for p in puntajes_lista],
+                        textposition="outside",
+                    ))
+                    fig_bar.update_layout(
+                        xaxis_title="Puntaje", xaxis_range=[0, pts_max_calc * 1.1],
+                        height=320, margin=dict(l=10, r=40, t=20, b=20),
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # Explicación de fórmulas
+                    with st.expander("ℹ️ ¿Cuándo se usa cada fórmula en Colombia?"):
+                        st.markdown("""
+    | Fórmula | Cuándo se usa |
+    |---------|---------------|
+    | **M — Mediana** | Licitaciones con múltiples oferentes; penaliza valores extremos. Equilibrada. |
+    | **MG — Media Geométrica** | Similar a la Mediana; favorece precios competitivos pero no extremos. |
+    | **MAB — M.A. Baja** | Usada cuando la entidad quiere incentivar precios bajos. Mayor riesgo de dumping. |
+    | **MAA — M.A. Alta** | Penaliza fuertemente a quien oferte por encima de la media alta. Favorece calidad. |
+    | **MV — Menor Valor** | El precio más bajo obtiene el máximo puntaje. Alto riesgo: requiere solidez financiera. |
+    """)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -739,6 +1096,63 @@ with tab2:
 with tab3:
     st.subheader("📁 Gestor de Documentos Habilitantes")
     perfil = st.session_state.perfil
+
+    st.markdown("### Biblioteca reutilizable del proponente")
+    st.caption("Carga una vez los soportes generales. LicitAPP copiará únicamente los vigentes a cada nueva oferta. "
+               "Las cartas, garantías y propuestas económicas no se reutilizan porque pertenecen a un proceso específico.")
+    _categorias_biblioteca = {
+        "existencia": "Cámara de Comercio / existencia",
+        "rut": "RUT",
+        "rup": "RUP",
+        "seguridad_social": "Seguridad social y parafiscales",
+        "experiencia": "Experiencia y certificados",
+        "financiero": "Estados e indicadores financieros",
+        "otros": "Otros soportes generales",
+    }
+    _cat_doc = st.selectbox("Tipo de documento", list(_categorias_biblioteca),
+                            format_func=lambda x: _categorias_biblioteca[x], key="biblioteca_categoria")
+    _vence_doc = st.text_input("Vigente hasta (AAAA-MM-DD; vacío si no vence)", key="biblioteca_vence",
+                               placeholder="2027-01-31")
+    _subidas_biblioteca = st.file_uploader(
+        "Agregar documentos a la biblioteca", accept_multiple_files=True,
+        type=["pdf", "docx", "doc", "xlsx", "xls", "jpg", "jpeg", "png", "zip", "rar"],
+        key="biblioteca_subidas")
+    if st.button("Guardar en mi biblioteca", key="biblioteca_guardar"):
+        from pathlib import Path as _Path
+        _base_biblioteca = _Path(DATA_DIR) / "documentos_proponente" / _cat_doc
+        _base_biblioteca.mkdir(parents=True, exist_ok=True)
+        _biblioteca = perfil.setdefault("biblioteca_documentos", [])
+        for _archivo in _subidas_biblioteca or []:
+            _nombre = nombre_archivo_seguro(_Path(_archivo.name).stem, largo=90) + _Path(_archivo.name).suffix.lower()
+            _ruta = _base_biblioteca / _nombre
+            _ruta.write_bytes(_archivo.getvalue())
+            _registro = next((x for x in _biblioteca if str(x.get("ruta")) == str(_ruta)), None)
+            _datos_doc = {"nombre": _archivo.name, "categoria": _cat_doc, "vence": _vence_doc.strip(),
+                          "ruta": str(_ruta), "cargado": datetime.now().isoformat()}
+            if _registro:
+                _registro.update(_datos_doc)
+            else:
+                _biblioteca.append(_datos_doc)
+        perfil["biblioteca_documentos"] = _biblioteca
+        st.session_state.perfil = perfil
+        guardar_perfil(perfil)
+        st.success(f"{len(_subidas_biblioteca or [])} documento(s) guardado(s) en la biblioteca.")
+
+    _biblioteca_actual = perfil.get("biblioteca_documentos") or []
+    if _biblioteca_actual:
+        _hoy_bib = datetime.now().date()
+        _tabla_bib = []
+        for _doc in _biblioteca_actual:
+            _vence = str(_doc.get("vence") or "")
+            try:
+                _estado = "❌ Vencido" if _vence and datetime.fromisoformat(_vence[:10]).date() < _hoy_bib else "✅ Disponible"
+            except ValueError:
+                _estado = "⚠️ Revisar fecha"
+            _tabla_bib.append({"Documento": _doc.get("nombre"), "Tipo": _categorias_biblioteca.get(_doc.get("categoria"), _doc.get("categoria")),
+                               "Vigente hasta": _vence or "No vence", "Estado": _estado})
+        st.dataframe(_tabla_bib, hide_index=True, width="stretch")
+    else:
+        st.info("La biblioteca está vacía. Agrega tus documentos habituales para acelerar la siguiente propuesta.")
 
     # ── JURÍDICOS ─────────────────────────────────────────────────────────────
     with st.expander("📜 DOCUMENTOS JURÍDICOS", expanded=True):
@@ -886,7 +1300,7 @@ with tab4:
     socios_nombres = [s.get("Razón Social", "") for s in perfil4.get("socios", []) if s.get("Razón Social")]
     miembros_opciones = [mi_empresa] + socios_nombres if mi_empresa else socios_nombres
 
-    miembros_sel = st.multiselect(
+    miembros_sel = _multiselect(
         "Miembros del consorcio",
         options=miembros_opciones,
         default=[mi_empresa] if mi_empresa else [],
@@ -1095,6 +1509,11 @@ with tab8:
             st.session_state.perfil = perfil5
             guardar_perfil(perfil5)
             st.success("✅ Configuración guardada.")
+            if perfil5.get("smtp_pass") and not st.session_state.get("_smtp_cifrado", True):
+                st.warning(
+                    "La contraseña del correo NO se guardó en disco (este equipo no puede cifrarla). "
+                    "Defínela como variable SMTP_PASS en el archivo .env para las alertas automáticas."
+                )
 
         st.markdown("---")
         col_alert1, col_alert2 = st.columns([2, 1])
@@ -1119,6 +1538,9 @@ with tab8:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab5:
     st.subheader("🕵️ Inteligencia Competitiva")
+    st.info("Aquí puedes saber con quién compites y qué contratos tiene en ejecución. "
+            "La información proviene de datos públicos de SECOP: úsala para evaluar capacidad y riesgos, "
+            "no para coordinar precios ni acuerdos con otros oferentes.")
 
     subtab_c1, subtab_c2 = st.tabs(["👤 Rastreo de Rivales", "🏛️ Análisis de Entidades"])
 
@@ -1129,6 +1551,15 @@ with tab5:
             "Cruza los contratos en ejecución de SECOP II con lo que el competidor "
             "declaró en la oferta. Si es consorcio, también revisa a cada socio."
         )
+        with st.expander("¿Cómo usar esta investigación?"):
+            st.markdown("""
+1. Busca primero por **NIT**; es más preciso que el nombre.
+2. Si compite como consorcio o unión temporal, busca también el nombre del grupo.
+3. Revisa contratos en ejecución, participación en otros consorcios y experiencia reciente.
+4. Si tienes la declaración de contratos del rival, pega sus referencias para detectar posibles omisiones.
+
+Un resultado vacío no prueba que la empresa no tenga contratos: puede haber diferencias de nombre, NIT o actualización en SECOP.
+""")
         consulta_comp = st.text_input(
             "NIT, empresa o consorcio",
             placeholder="901727459 o CONSORCIO AMAGA 2023",
@@ -1156,7 +1587,21 @@ with tab5:
             elif not hallazgo.get("en_ejecucion") and not hallazgo.get("otros") and not hallazgo.get("socios"):
                 st.warning("No hay contratos públicos con ese NIT o ese nombre.")
             else:
-                st.markdown(f"### {hallazgo['nombre']}")
+                st.markdown(f"### {esc_md(hallazgo['nombre'])}")
+                if hallazgo.get("consorcios") and hallazgo.get("nits"):
+                    st.markdown(f"**Consorcios y uniones temporales donde participa ({len(hallazgo['consorcios'])})**")
+                    st.dataframe(
+                        [{
+                            "Consorcio": g["nombre"],
+                            "Código SECOP": g["codigo"],
+                            "Su participación %": g["participacion"],
+                            "Líder": "Sí" if g["lider"] else "No",
+                            "Creado": g["creado"],
+                            "Contratos en ejecución": g.get("en_ejecucion", 0),
+                        } for g in hallazgo["consorcios"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
                 if hallazgo["es_plural"]:
                     st.markdown("**Socios del consorcio o unión temporal**")
                     if hallazgo["socios"]:
@@ -1216,7 +1661,7 @@ with tab5:
             if data.get("error"):
                 st.warning(f"⚠️ {data['error']}")
             else:
-                st.markdown(f"### {data.get('nombre','N/A')} — NIT {data.get('nit','')}")
+                st.markdown(f"### {esc_md(data.get('nombre','N/A'))} — NIT {esc_md(data.get('nit',''))}")
                 rc1, rc2, rc3 = st.columns(3)
                 rc1.metric("Contratos ganados", data.get("total_contratos", 0))
                 rc2.metric("Valor total", fmt_cop(data.get("valor_total_cop", 0)))
@@ -1262,7 +1707,7 @@ with tab5:
             if pred.get("error"):
                 st.warning(f"⚠️ {pred['error']}")
             else:
-                st.markdown(f"**Entidad:** {pred.get('entidad','')} | **Sector UNSPSC:** {pred.get('sector_unspsc','')}")
+                st.markdown(f"**Entidad:** {esc_md(pred.get('entidad',''))} | **Sector UNSPSC:** {esc_md(pred.get('sector_unspsc',''))}")
                 rivales = pred.get("rivales_probables", [])
                 if rivales:
                     st.dataframe(pd.DataFrame(rivales), use_container_width=True, hide_index=True)
@@ -1281,6 +1726,9 @@ with tab5:
                     ents = get_entidades(q=ent_q, departamento=ent_depto if ent_depto else None)
                 except Exception as _e:
                     ents = {"error": str(_e), "items": []}
+            st.session_state["ents_res"] = ents
+        ents = st.session_state.get("ents_res")
+        if ents:
             if ents.get("error"):
                 st.warning(ents["error"])
             elif not ents.get("items"):
@@ -1302,7 +1750,7 @@ with tab5:
                     if det.get("error"):
                         st.warning(det["error"])
                     else:
-                        st.markdown(f"### {det.get('nombre','')} — {det.get('departamento','')}")
+                        st.markdown(f"### {esc_md(det.get('nombre',''))} — {esc_md(det.get('departamento',''))}")
                         st.metric("Procesos históricos", det.get("total_procesos", 0))
                         col_e1, col_e2 = st.columns(2)
                         with col_e1:
@@ -1353,7 +1801,7 @@ with tab6:
 
     # ── Lista de watchlist ─────────────────────────────────────────────────────
     if not watchlist:
-        st.info("📭 No tienes procesos en seguimiento. Agrégalos arriba o con el botón '📋 Preparar oferta' en el Explorador.")
+        st.info("📭 No tienes procesos en seguimiento. Escribe arriba el ID del proceso (por ejemplo, el CO1.REQ… del Explorador) y pulsa **Agregar**.")
     else:
         col_ws_h1, col_ws_h2 = st.columns([3, 1])
         col_ws_h1.markdown(f"**{len(watchlist)} proceso(s) en seguimiento:**")
@@ -1395,7 +1843,7 @@ with tab6:
                         else "#1F4E79"
                     )
                     wc2.markdown(
-                        f"**Estado:** <span style='color:{estado_col};font-weight:700'>{w['ultimo_estado']}</span>",
+                        f"**Estado:** <span style='color:{estado_col};font-weight:700'>{esc_html(w['ultimo_estado'])}</span>",
                         unsafe_allow_html=True,
                     )
                 alertas_ws = wc3.checkbox("🔔 Alertas email", value=w.get("alertas", True),
@@ -1455,7 +1903,7 @@ with tab7:
             else:
                 st.warning("Falta: " + ", ".join(_paquete["faltantes"]))
             st.text_area("Carta de oferta", _paquete["carta"], height=260)
-            _nombre_archivo = f"propuesta_{_paquete['proceso']['id']}.txt"
+            _nombre_archivo = f"propuesta_{nombre_archivo_seguro(_paquete['proceso']['id'], defecto='proceso')}.txt"
             st.download_button(
                 "Descargar carta de oferta",
                 data=_paquete["carta"].encode("utf-8"),
@@ -1472,7 +1920,7 @@ with tab7:
                 st.download_button(
                     "Descargar correo para Findeter",
                     data=_correo_txt.encode("utf-8"),
-                    file_name=f"correo_{_paquete['proceso']['id']}.txt",
+                    file_name=f"correo_{nombre_archivo_seguro(_paquete['proceso']['id'], defecto='proceso')}.txt",
                     mime="text/plain",
                     key="btn_descarga_correo",
                 )
@@ -1487,6 +1935,121 @@ with tab7:
                 guardar_perfil(_perfil_prop)
                 st.session_state.perfil = _perfil_prop
                 st.success("Propuesta guardada en el perfil.")
+
+    st.markdown("---")
+    st.subheader("Paquete completo desde un expediente real")
+    st.caption(
+        "Usa como plantilla una propuesta ya armada (carpeta en `expedientes/`). "
+        "LicitApp copia el mismo orden de carpetas, actualiza los formatos Word con el "
+        "proceso elegido y marca lo que debes firmar, renovar o rehacer. No inventa documentos."
+    )
+    _expedientes = [x for x in listar_expedientes() if x["cargado"]]
+    if not _expedientes:
+        st.info("Copia la carpeta de la propuesta en `expedientes/<nombre>/` para usarla aquí.")
+    else:
+        _exp_sel = st.selectbox(
+            "Expediente plantilla",
+            [x["nombre"] for x in _expedientes],
+            key="exp_sel",
+        )
+        _exp_ruta = next(x["ruta"] for x in _expedientes if x["nombre"] == _exp_sel)
+        try:
+            _exp = leer_expediente(_exp_ruta)
+        except ValueError as _exc_exp:
+            st.error(str(_exc_exp))
+            _exp = None
+        if _exp:
+            _d = _exp["datos"]
+            _e1, _e2, _e3 = st.columns(3)
+            _e1.metric("Proceso del expediente", _d["proceso_id"] or "—")
+            _e2.metric("Entidad", (_d["entidad"] or "—")[:28])
+            _e3.metric("Oferta del expediente", fmt_cop(_d["valor_oferta"]) if _d["valor_oferta"] else "—")
+            st.caption(f"Objeto: {esc_md(_d['objeto'] or '—')}")
+            for _aviso in _exp["avisos"]:
+                st.warning(_aviso)
+            with st.expander(f"Orden de la propuesta ({len(_exp['secciones'])} carpetas)", expanded=False):
+                st.dataframe(
+                    [{"Orden": s["numero"], "Carpeta": s["carpeta"], "Archivos": len(s["archivos"]),
+                      "Formatos Word": sum(a["clase"] == "formato" for a in s["archivos"])}
+                     for s in _exp["secciones"]],
+                    use_container_width=True, hide_index=True,
+                )
+                if _exp["referencia"]:
+                    st.caption("Documentos de referencia (no van en el paquete): "
+                               + ", ".join(r["nombre"] for r in _exp["referencia"]))
+
+            st.markdown("**Consorcio**")
+            _cons_nombre = st.text_input("Nombre del proponente o consorcio", value=_d["proponente"], key="exp_cons_nombre")
+            _cons_df = st.data_editor(
+                pd.DataFrame(_d["integrantes"] or [], columns=["nombre", "nit", "participacion"]),
+                num_rows="dynamic", use_container_width=True, key="exp_cons_integrantes",
+                column_config={"participacion": st.column_config.NumberColumn("Participación %", min_value=0, max_value=100)},
+            )
+            _cons_lista = [r for r in _cons_df.to_dict("records") if str(r.get("nombre") or "").strip()]
+            _suma = sum(float(r.get("participacion") or 0) for r in _cons_lista)
+            if _cons_lista and abs(_suma - 100) > 0.01:
+                st.error(f"Las participaciones suman {_suma:g} %; deben sumar 100 %.")
+            _corregir = st.checkbox(
+                "Corregir en los formatos cualquier otro nombre de consorcio",
+                value=bool(_exp["avisos"]), key="exp_corregir",
+            )
+
+            _g1, _g2, _g3 = st.columns(3)
+            _mismo = _g1.checkbox(
+                "Usar el proceso del expediente", value=not _proc_prop, key="exp_mismo",
+                help="Arma de nuevo la propuesta del mismo proceso del expediente.",
+            )
+            _cierre = _g2.date_input("Fecha de cierre", value=datetime.now().date(), key="exp_cierre")
+            _pct_gar = _g3.number_input("Garantía de seriedad (%)", 0.0, 100.0, 10.0, 0.5, key="exp_pct")
+
+            if _mismo:
+                _proc_exp = {"id": _d["proceso_id"], "entidad": _d["entidad"], "objeto": _d["objeto"],
+                             "presupuesto_oficial": _d["garantia_valor"] * 100 / _pct_gar if _d["garantia_valor"] and _pct_gar else 0}
+                _oferta_exp = _oferta_prop if (_oferta_prop and _oferta_prop.get("precio")) else {
+                    "precio": _d["valor_oferta"], "formula": "", "nombre_formula": "valor del expediente"}
+            else:
+                _proc_exp = _proc_prop
+                _oferta_exp = _oferta_prop
+            if not _proc_exp:
+                st.warning("Elige un proceso en el Explorador o marca **Usar el proceso del expediente**.")
+            elif not _oferta_exp or not _oferta_exp.get("precio"):
+                st.warning("Guarda un precio en la Calculadora (**Usar esta oferta**).")
+            elif st.button("Generar propuesta en la carpeta del expediente", type="primary", key="btn_generar_exp"):
+                try:
+                    _res = generar_paquete(
+                        _exp, _proc_exp, _oferta_exp,
+                        consorcio={"nombre": _cons_nombre, "integrantes": _cons_lista, "corregir_nombres": _corregir},
+                        perfil=_perfil_prop, fecha_cierre=_cierre, pct_garantia=_pct_gar,
+                    )
+                    st.session_state["paquete_expediente"] = _res
+                except (ValueError, OSError) as _exc_gen:
+                    st.error(str(_exc_gen))
+
+            _res = st.session_state.get("paquete_expediente")
+            if _res:
+                st.success(f"Propuesta generada en: `{_res['carpeta']}`")
+                _r1, _r2, _r3 = st.columns(3)
+                _r1.metric("Archivos", len(_res["archivos"]))
+                _r2.metric("Por resolver", len(_res["pendientes"]))
+                _r3.metric("Canal", _res["canal"]["tipo"].upper())
+                st.info(f"{esc_md(_res['canal']['instruccion'])}  \nDestino: {esc_md(_res['canal']['destino'])}")
+                st.dataframe(
+                    [{"Orden": f["orden"], "Carpeta": f["seccion"], "Archivo": f["archivo"],
+                      "Estado": f["estado"], "Qué hacer": f["observacion"]}
+                     for f in sorted(_res["indice"], key=lambda f: f["orden"])],
+                    use_container_width=True, hide_index=True,
+                )
+                import io as _io
+                import zipfile as _zipfile
+                _buf = _io.BytesIO()
+                with _zipfile.ZipFile(_buf, "w", _zipfile.ZIP_DEFLATED) as _z:
+                    for _rel in _res["archivos"]:
+                        _z.write(os.path.join(_res["carpeta"], _rel), _rel)
+                st.download_button(
+                    "Descargar paquete (.zip)", data=_buf.getvalue(),
+                    file_name=f"propuesta_{nombre_archivo_seguro(_res['proceso_id'], defecto='proceso')}.zip", mime="application/zip",
+                    key="btn_zip_exp",
+                )
 
     st.markdown("---")
     st.subheader("Bot de SECOP II, opcional")
@@ -1585,7 +2148,7 @@ with tab7:
             "Valor de la propuesta económica (COP)",
             min_value=1_000_000, max_value=10_000_000_000,
             value=valor_default, step=500_000, format="%d",
-            key="bot_propuesta",
+            key=f"bot_propuesta_{valor_default}",
         )
         pct_dto = (po_default_bot - propuesta_bot) / po_default_bot * 100 if po_default_bot else 0
         st.caption(f"Descuento sobre el P.O.: **{pct_dto:.1f}%** | P.O.: {fmt_cop(po_default_bot)}")
@@ -1678,7 +2241,8 @@ with tab7:
                     "log": [],
                 }
             except Exception as _e:
-                resultado = {"exito": False, "error": str(_e), "log": []}
+                from seguridad import redactar as _redactar
+                resultado = {"exito": False, "error": _redactar(str(_e), (usuario_bot, contrasena_bot)), "log": []}
 
         # ── Mostrar resultado ─────────────────────────────────────────────────
         if resultado.get("exito"):

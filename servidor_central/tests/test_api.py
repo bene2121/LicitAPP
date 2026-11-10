@@ -7,15 +7,28 @@ from sqlalchemy.orm import sessionmaker
 TEST_DB = "sqlite:///:memory:"
 
 @pytest.fixture(scope="module")
-def client():
+def client(tmp_path_factory):
+    # Base de licencias y base de datos temporales: los endpoints exigen X-License-Key (C-4).
+    import os, sqlite3
+    tmp = tmp_path_factory.mktemp("central")
+    lic_db = tmp / "clientes.db"
+    con = sqlite3.connect(lic_db)
+    con.execute("CREATE TABLE clientes (license_id TEXT, activo INTEGER, fecha_vencimiento TEXT)")
+    con.execute("INSERT INTO clientes VALUES ('TEST-LIC', 1, '2099-12-31')")
+    con.commit()
+    con.close()
+    os.environ["SECOP_ADMIN_DB"] = str(lic_db)
+    os.environ.setdefault("DATABASE_URL", f"sqlite:///{tmp / 'central.db'}")
     from servidor_central.db import Base, get_db
-    eng = create_engine(TEST_DB, connect_args={"check_same_thread": False})
+    from sqlalchemy.pool import StaticPool  # una sola conexión: la BD en memoria vive entre hilos
+    eng = create_engine(TEST_DB, connect_args={"check_same_thread": False}, poolclass=StaticPool)
     # SQLite no soporta JSONB — monkey-patch para test
     import sqlalchemy.dialects.postgresql as pg
     from sqlalchemy import JSON
     if not hasattr(pg, '_patched'):
         pg.JSONB = JSON
         pg._patched = True
+    import servidor_central.models  # noqa: F401  registra las tablas antes de crearlas
     Base.metadata.create_all(bind=eng)
     S = sessionmaker(bind=eng)
     def override():
@@ -26,7 +39,7 @@ def client():
             db.close()
     from servidor_central.main import app
     app.dependency_overrides[get_db] = override
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-License-Key": "TEST-LIC"}) as c:
         yield c
 
 def test_health(client):

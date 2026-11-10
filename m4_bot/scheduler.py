@@ -2,22 +2,27 @@
 Scheduler automático — ejecuta el ingestor y evalúa oportunidades diariamente.
 Corre en segundo plano mientras la aplicación está abierta.
 """
-import os, sys, json, logging, smtplib
+import os, sys, json, logging, smtplib, ssl, re
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from seguridad import esc_html, leer_secreto, sin_control
 
 logger = logging.getLogger("scheduler")
 
 def _data_dir():
+    if os.environ.get("LICITAPP_DATA_DIR"):
+        return os.environ["LICITAPP_DATA_DIR"]
     if getattr(sys, "frozen", False):
         return os.path.join(os.path.dirname(sys.executable), "data")
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
 DATA_DIR    = _data_dir()
 PERFIL_PATH = os.path.join(DATA_DIR, "perfil_proponente.json")
+SMTP_SECRETO_PATH = os.path.join(DATA_DIR, ".smtp_secret")
+_CORREO = re.compile(r"^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$")
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
@@ -33,7 +38,9 @@ def _cargar_config_email() -> dict:
         cfg["alerta_nuevos"]  = perfil.get("alerta_nuevos", True)
         cfg["alerta_cierre"]  = perfil.get("alerta_cierre", True)
         cfg["smtp_user"]    = perfil.get("smtp_user", os.getenv("SMTP_USER", ""))
-        cfg["smtp_pass"]    = perfil.get("smtp_pass", os.getenv("SMTP_PASS", ""))
+        # Orden: almacén cifrado, variable de entorno y, solo como respaldo de perfiles
+        # antiguos aún sin migrar, el valor que hubiera en el JSON.
+        cfg["smtp_pass"]    = leer_secreto(SMTP_SECRETO_PATH) or os.getenv("SMTP_PASS", "") or perfil.get("smtp_pass", "")
         cfg["smtp_host"]    = perfil.get("smtp_host", os.getenv("SMTP_HOST", "smtp.gmail.com"))
         cfg["smtp_port"]    = int(perfil.get("smtp_port", os.getenv("SMTP_PORT", "587")))
     except Exception:
@@ -51,6 +58,8 @@ def enviar_email_alerta(procesos_top: list, cfg: dict) -> bool:
     smtp_pass = cfg.get("smtp_pass", "")
     destinatario = cfg.get("destinatario", "")
 
+    if not _CORREO.match(sin_control(smtp_user)) or not _CORREO.match(sin_control(destinatario)):
+        destinatario = ""  # direcciones con saltos de línea u otros caracteres: no se envía
     if not smtp_user or not smtp_pass or not destinatario:
         logger.warning(
             "Email no configurado. Ingresa smtp_user, smtp_pass y email en 'Mi Cuenta > Configuración'."
@@ -60,8 +69,9 @@ def enviar_email_alerta(procesos_top: list, cfg: dict) -> bool:
     # ── Construir cuerpo HTML ──────────────────────────────────────────────────
     filas = ""
     for p in procesos_top[:10]:
-        nombre = (p.get("objeto") or p.get("titulo") or "")[:70]
-        entidad = p.get("entidad", "")[:40]
+        # Texto que viene de SECOP: se escapa antes de armar el HTML del correo.
+        nombre = esc_html((p.get("objeto") or p.get("titulo") or "")[:70])
+        entidad = esc_html(str(p.get("entidad", "") or "")[:40])
         po = f"$ {float(p.get('presupuesto_oficial', 0) or 0):,.0f}".replace(",", ".")
         dias = p.get("dias_al_cierre", "–")
         score = int(p.get("score", 0))
@@ -69,7 +79,7 @@ def enviar_email_alerta(procesos_top: list, cfg: dict) -> bool:
         try:
             cierre = datetime.fromisoformat(str(p.get("fecha_cierre", ""))).strftime("%d/%m/%Y")
         except Exception:
-            cierre = str(p.get("fecha_cierre", ""))[:10]
+            cierre = esc_html(str(p.get("fecha_cierre", ""))[:10])
 
         filas += f"""
         <tr>
@@ -78,7 +88,7 @@ def enviar_email_alerta(procesos_top: list, cfg: dict) -> bool:
           <td>{nombre}</td>
           <td style="text-align:right">{po}</td>
           <td style="text-align:center">{cierre}</td>
-          <td style="text-align:center;{'color:red;font-weight:700' if isinstance(dias, int) and dias <= 5 else ''}">{dias}</td>
+          <td style="text-align:center;{'color:red;font-weight:700' if isinstance(dias, int) and dias <= 5 else ''}">{esc_html(dias)}</td>
         </tr>"""
 
     empresa = cfg.get("empresa", "")
@@ -89,7 +99,7 @@ def enviar_email_alerta(procesos_top: list, cfg: dict) -> bool:
 <div style="max-width:700px;margin:auto;background:#fff;border-radius:8px;padding:24px;
             box-shadow:0 2px 8px rgba(0,0,0,.1)">
   <h2 style="color:#1F4E79;margin-bottom:4px">🏗️ SECOP Automatizador — Alertas de Oportunidades</h2>
-  <p style="color:#666;margin-top:4px;font-size:0.9em">{fecha_str} | {empresa}</p>
+  <p style="color:#666;margin-top:4px;font-size:0.9em">{fecha_str} | {esc_html(empresa)}</p>
   <p>Se encontraron <strong>{len(procesos_top)} procesos con score ≥ 80</strong>
      listos para ofertar:</p>
   <table width="100%" cellpadding="6" cellspacing="0"
@@ -118,9 +128,9 @@ def enviar_email_alerta(procesos_top: list, cfg: dict) -> bool:
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
         with smtplib.SMTP(cfg.get("smtp_host", "smtp.gmail.com"),
-                          cfg.get("smtp_port", 587)) as server:
+                          cfg.get("smtp_port", 587), timeout=30) as server:
             server.ehlo()
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())  # verifica el certificado del servidor
             server.login(smtp_user, smtp_pass)
             server.sendmail(smtp_user, destinatario, msg.as_string())
 
