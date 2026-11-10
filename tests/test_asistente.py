@@ -270,7 +270,27 @@ def test_expediente_con_varios_pdf_conserva_origen_y_senala_adenda(monkeypatch):
         ("pliego.pdf", b"uno"), ("adenda 1.pdf", b"dos")])
     assert resultado["paginas"] == 6 and resultado["cobertura"] == 100
     assert {x["documento"] for x in resultado["hallazgos"]} == {"pliego.pdf", "adenda 1.pdf"}
-    assert resultado["impactos_adendas"][0]["estado"] == "posible_impacto_sin_confirmar"
+    assert resultado["impactos_adendas"][0]["estado"] == "posible_cambio_sin_confirmar"
+
+
+def test_comparador_adendas_muestra_antes_despues_y_reabre_grupo():
+    from m7_competencia.entidad import comparar_adendas, reabrir_requisitos_por_adenda
+    base = {"documento": "pliego.pdf", "hallazgos": [{"id": "b1", "categoria": "Cronograma",
+            "documento": "pliego.pdf", "pagina": 8,
+            "texto": "La fecha de cierre será 10/12/2026 a las 10:00."}]}
+    adenda = {"documento": "Adenda 1.pdf", "hallazgos": [{"id": "a1", "categoria": "Cronograma",
+              "documento": "Adenda 1.pdf", "pagina": 2,
+              "texto": "Se modifica la fecha de cierre al 15/12/2026 a las 14:00."}]}
+    cambios = comparar_adendas([base, adenda])
+    assert cambios[0]["valores_diferentes"]
+    assert "10/12/2026" in cambios[0]["valores_anteriores"]
+    assert "15/12/2026" in cambios[0]["valores_adenda"]
+    matriz = [{"requisito": "Presentar antes del cierre", "grupo": "Cronograma",
+               "estado": "Cumple", "evidencia": "calendario.pdf"}]
+    sin_confirmar = reabrir_requisitos_por_adenda(matriz, cambios, {})
+    assert sin_confirmar[0]["estado"] == "Cumple"
+    reabierta = reabrir_requisitos_por_adenda(matriz, cambios, {cambios[0]["id"]: True})
+    assert reabierta[0]["estado"] == "Pendiente" and reabierta[0]["evidencia"] == "calendario.pdf"
 
 
 def test_historial_entidad_agrupa_oferentes_y_adjudicatarios():

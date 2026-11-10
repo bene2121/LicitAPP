@@ -98,9 +98,9 @@ el mismo resultado, mostrando cada operación.
 
 - [ ] Guardar huella y versión de documentos oficiales.
 - [ ] Detectar documentos nuevos o modificados.
-- [ ] Comparar versiones y resumir cambios verificables.
-- [ ] Identificar impacto sobre fechas, requisitos, garantía, precio y formatos.
-- [ ] Reabrir automáticamente controles afectados.
+- [~] Comparar versiones y resumir cambios verificables.
+- [~] Identificar impacto sobre fechas, requisitos, garantía, precio y formatos.
+- [x] Reabrir controles afectados únicamente después de confirmación humana.
 - [ ] Registrar fecha de última comprobación y cobertura de la consulta.
 
 **Aceptación:** al introducir una adenda de prueba, el sistema señala exactamente

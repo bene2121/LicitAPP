@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import re
+from difflib import SequenceMatcher
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -284,12 +285,7 @@ def extraer_requisitos_documentos(documentos: list[tuple[str, bytes]], max_pagin
         estado = "texto_completo"
     else:
         estado = "texto_parcial"
-    impactos = []
-    for item in hallazgos:
-        if "adenda" in fold(item.get("documento") or "").lower():
-            impactos.append({"categoria": item.get("categoria"), "documento": item.get("documento"),
-                             "pagina": item.get("pagina"), "texto": item.get("texto"),
-                             "estado": "posible_impacto_sin_confirmar"})
+    impactos = comparar_adendas(lecturas)
     return {
         "documento": f"Expediente ({len(lecturas)} documentos)", "documentos": lecturas,
         "paginas": paginas, "legibles": legibles, "cobertura": cobertura,
@@ -297,6 +293,65 @@ def extraer_requisitos_documentos(documentos: list[tuple[str, bytes]], max_pagin
         "impactos_adendas": impactos,
         "aviso": "Hallazgos automáticos sin confirmar. Una mención en una adenda no prueba por sí sola que el requisito cambió.",
     }
+
+
+def _marcadores_cambio(texto: str) -> list[str]:
+    """Valores verificables útiles para comparar versiones, conservando el literal."""
+    patrones = [
+        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b\d{1,2}:\d{2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?\b",
+        r"\$\s*[\d.,]+", r"\b\d+(?:[.,]\d+)?\s*%",
+    ]
+    valores = []
+    for patron in patrones:
+        valores.extend(re.findall(patron, texto or "", flags=re.I))
+    return list(dict.fromkeys(" ".join(str(x).split()) for x in valores))
+
+
+def comparar_adendas(lecturas: list[dict]) -> list[dict]:
+    """Relaciona menciones de adendas con el fragmento base más parecido.
+
+    El resultado es una alerta, no una conclusión jurídica. No se afirma que hubo
+    cambio hasta que el usuario confronte ambos documentos y lo confirme.
+    """
+    base, adendas = [], []
+    for lectura in lecturas or []:
+        destino = adendas if "adenda" in fold(lectura.get("documento") or "").lower() else base
+        destino.extend(lectura.get("hallazgos") or [])
+    cambios = []
+    for nuevo in adendas:
+        candidatos = [x for x in base if x.get("categoria") == nuevo.get("categoria")]
+        anterior = max(candidatos, key=lambda x: SequenceMatcher(
+            None, fold(str(x.get("texto") or "")).lower(),
+            fold(str(nuevo.get("texto") or "")).lower()).ratio(), default=None)
+        texto_nuevo = str(nuevo.get("texto") or "")
+        texto_anterior = str((anterior or {}).get("texto") or "")
+        antes, despues = _marcadores_cambio(texto_anterior), _marcadores_cambio(texto_nuevo)
+        cambios.append({
+            "id": f"cambio_{nuevo.get('id')}", "categoria": nuevo.get("categoria"),
+            "documento_adenda": nuevo.get("documento"), "pagina_adenda": nuevo.get("pagina"),
+            "texto_adenda": texto_nuevo, "documento_base": (anterior or {}).get("documento"),
+            "pagina_base": (anterior or {}).get("pagina"), "texto_base": texto_anterior,
+            "valores_anteriores": antes, "valores_adenda": despues,
+            "valores_diferentes": bool(set(antes) != set(despues)),
+            "estado": "posible_cambio_sin_confirmar",
+        })
+    return cambios
+
+
+def reabrir_requisitos_por_adenda(matriz: list[dict], cambios: list[dict], confirmados: dict | set | list) -> list[dict]:
+    """Devuelve una copia marcando pendientes los grupos afectados y preserva evidencia."""
+    claves = set(confirmados if not isinstance(confirmados, dict) else
+                 [k for k, valor in confirmados.items() if valor])
+    categorias = {str(x.get("categoria") or "") for x in cambios if x.get("id") in claves}
+    resultado = []
+    for item in matriz or []:
+        copia = dict(item)
+        if str(copia.get("grupo") or "") in categorias and copia.get("estado") != "No aplica":
+            copia["estado"] = "Pendiente"
+            copia["observacion_adenda"] = "Reabierto: una adenda confirmada puede afectar este requisito."
+        resultado.append(copia)
+    return resultado
 
 
 def hallazgos_a_requisitos(lectura: dict, confirmados: dict | set | list) -> list[dict]:

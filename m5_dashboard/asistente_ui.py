@@ -351,7 +351,8 @@ def _paso_documentos(perfil: dict) -> None:
 # ── 3. Evaluación previa ────────────────────────────────────────────────────
 def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
     from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total, ficha_decision
-    from m7_competencia.entidad import analizar_entidad, extraer_requisitos_documentos, hallazgos_a_requisitos
+    from m7_competencia.entidad import (analizar_entidad, extraer_requisitos_documentos,
+                                        hallazgos_a_requisitos, reabrir_requisitos_por_adenda)
 
     proceso = st.session_state.get("proceso_seleccionado") or {}
     proceso_id = str(proceso.get("id") or proceso.get("referencia") or "proceso")
@@ -406,10 +407,33 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
                     "Estado": estados.get(x.get("estado_lectura"), "Sin verificar"),
                 } for x in lectura["documentos"]], hide_index=True, width="stretch")
             if lectura.get("impactos_adendas"):
-                st.error("Posibles impactos encontrados en documentos llamados 'adenda'. Debes compararlos con la versión anterior.")
+                st.error("Posibles cambios encontrados en documentos llamados 'adenda'. Confirma cada uno contra los documentos oficiales.")
+                cambios_confirmados = dict(previa.get("cambios_adenda_confirmados") or {})
                 for impacto in lectura["impactos_adendas"]:
-                    st.caption(f"{impacto['documento']}, p. {impacto['pagina']} · {impacto['categoria']}: "
-                               f"…{impacto['texto']}…")
+                    with st.expander(f"{impacto['categoria']} · {impacto['documento_adenda']}, p. {impacto['pagina_adenda']}"):
+                        if impacto.get("documento_base"):
+                            st.markdown(f"**Versión base — {impacto['documento_base']}, p. {impacto['pagina_base']}**")
+                            st.caption(f"…{impacto['texto_base']}…")
+                        else:
+                            st.info("No se encontró un fragmento equivalente en los documentos base cargados.")
+                        st.markdown(f"**Adenda — {impacto['documento_adenda']}, p. {impacto['pagina_adenda']}**")
+                        st.caption(f"…{impacto['texto_adenda']}…")
+                        if impacto.get("valores_anteriores") or impacto.get("valores_adenda"):
+                            st.write({"Valores en base": impacto.get("valores_anteriores"),
+                                      "Valores en adenda": impacto.get("valores_adenda")})
+                        cambios_confirmados[impacto["id"]] = st.checkbox(
+                            "Confirmé manualmente que esta adenda afecta la oferta",
+                            value=bool(cambios_confirmados.get(impacto["id"])),
+                            key=f"cambio_adenda_{proceso_id}_{impacto['id']}")
+                if st.button("Reabrir requisitos afectados", key=f"reabrir_adenda_{proceso_id}"):
+                    previa["matriz_requisitos"] = reabrir_requisitos_por_adenda(
+                        list(previa.get("matriz_requisitos") or []), lectura["impactos_adendas"], cambios_confirmados)
+                    previa["cambios_adenda_confirmados"] = cambios_confirmados
+                    guardadas[proceso_id] = previa
+                    perfil["evaluaciones_requisitos"] = guardadas
+                    guardar_perfil(perfil)
+                    st.success("Los grupos confirmados quedaron pendientes de nueva revisión; no se eliminó la evidencia existente.")
+                    st.rerun()
             if not lectura["secciones"]:
                 st.info("No se localizaron secciones automáticamente. Revisa el PDF completo y sus anexos.")
             confirmados = dict(previa.get("hallazgos_confirmados") or {})
@@ -528,7 +552,7 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
         matriz_base = previa.get("matriz_requisitos") or []
         matriz_df = st.data_editor(
             pd.DataFrame(matriz_base, columns=["requisito", "grupo", "estado", "critico", "fuente",
-                                               "evidencia", "responsable", "fecha_limite"]),
+                                               "evidencia", "responsable", "fecha_limite", "observacion_adenda"]),
             num_rows="dynamic", width="stretch", key="eval_matriz_requisitos",
             column_config={
                 "requisito": "Requisito del pliego", "grupo": "Grupo",
@@ -536,6 +560,7 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
                 "critico": st.column_config.CheckboxColumn("Crítico / causal de rechazo"),
                 "fuente": "Documento y página", "evidencia": "Archivo o soporte",
                 "responsable": "Responsable", "fecha_limite": "Fecha límite",
+                "observacion_adenda": st.column_config.TextColumn("Alerta de adenda", disabled=True),
             })
 
     with st.expander("5. Viabilidad económica y decisión"):
