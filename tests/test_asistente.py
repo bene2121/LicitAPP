@@ -243,6 +243,23 @@ def test_pdf_escaneado_reporta_estado_sin_inventar_hallazgos():
     assert lectura["cobertura"] == 0 and lectura["hallazgos"] == []
 
 
+def test_expediente_con_varios_pdf_conserva_origen_y_senala_adenda(monkeypatch):
+    from m7_competencia import entidad
+    def lectura(_datos, max_paginas=250, documento=""):
+        categoria = "Experiencia" if "pliego" in documento else "Cronograma"
+        item = {"id": documento, "categoria": categoria, "documento": documento,
+                "pagina": 2, "texto": "fecha de cierre", "estado": "sin_verificar"}
+        return {"documento": documento, "paginas": 3, "legibles": 3, "cobertura": 100,
+                "estado_lectura": "texto_completo", "secciones": {categoria: [item]},
+                "hallazgos": [item], "aviso": ""}
+    monkeypatch.setattr(entidad, "extraer_requisitos_pdf", lectura)
+    resultado = entidad.extraer_requisitos_documentos([
+        ("pliego.pdf", b"uno"), ("adenda 1.pdf", b"dos")])
+    assert resultado["paginas"] == 6 and resultado["cobertura"] == 100
+    assert {x["documento"] for x in resultado["hallazgos"]} == {"pliego.pdf", "adenda 1.pdf"}
+    assert resultado["impactos_adendas"][0]["estado"] == "posible_impacto_sin_confirmar"
+
+
 def test_historial_entidad_agrupa_oferentes_y_adjudicatarios():
     from datetime import date
     from m7_competencia.entidad import analizar_entidad

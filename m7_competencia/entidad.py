@@ -204,7 +204,8 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str 
                 pos = min(posiciones)
                 inicio, fin = max(0, pos - 180), min(len(texto), pos + 650)
                 fragmento = texto[inicio:fin]
-                item = {"id": f"{fold(titulo).lower().replace(' ', '_')}_{pagina}_{len(encontrados) + 1}",
+                doc_id = fold(documento).lower().replace(" ", "_")[:40]
+                item = {"id": f"{doc_id}_{fold(titulo).lower().replace(' ', '_')}_{pagina}_{len(encontrados) + 1}",
                         "categoria": titulo, "documento": documento, "pagina": pagina,
                         "texto": fragmento, "estado": "sin_verificar"}
                 encontrados.append(item)
@@ -218,6 +219,43 @@ def extraer_requisitos_pdf(datos: bytes, max_paginas: int = 250, documento: str 
     return {"documento": documento, "paginas": len(lector.pages), "legibles": len(textos),
             "cobertura": cobertura, "estado_lectura": estado, "secciones": secciones, "hallazgos": hallazgos,
             "aviso": "Fragmentos encontrados automáticamente. Confirma siempre el texto completo, tablas y adendas."}
+
+
+def extraer_requisitos_documentos(documentos: list[tuple[str, bytes]], max_paginas: int = 250) -> dict:
+    """Analiza varios PDF sin mezclar su procedencia ni afirmar cambios de una adenda."""
+    if not documentos:
+        raise ValueError("Carga al menos un pliego, anexo o adenda en PDF.")
+    if len(documentos) > 30:
+        raise ValueError("Puedes analizar máximo 30 documentos a la vez.")
+    lecturas = [extraer_requisitos_pdf(datos, max_paginas=max_paginas, documento=nombre)
+                for nombre, datos in documentos]
+    hallazgos, secciones = [], {}
+    for lectura in lecturas:
+        hallazgos.extend(lectura.get("hallazgos") or [])
+        for categoria, items in (lectura.get("secciones") or {}).items():
+            secciones.setdefault(categoria, []).extend(items)
+    paginas = sum(int(x.get("paginas") or 0) for x in lecturas)
+    legibles = sum(int(x.get("legibles") or 0) for x in lecturas)
+    cobertura = round(legibles / paginas * 100) if paginas else 0
+    if not legibles:
+        estado = "escaneado_sin_ocr"
+    elif cobertura >= 90:
+        estado = "texto_completo"
+    else:
+        estado = "texto_parcial"
+    impactos = []
+    for item in hallazgos:
+        if "adenda" in fold(item.get("documento") or "").lower():
+            impactos.append({"categoria": item.get("categoria"), "documento": item.get("documento"),
+                             "pagina": item.get("pagina"), "texto": item.get("texto"),
+                             "estado": "posible_impacto_sin_confirmar"})
+    return {
+        "documento": f"Expediente ({len(lecturas)} documentos)", "documentos": lecturas,
+        "paginas": paginas, "legibles": legibles, "cobertura": cobertura,
+        "estado_lectura": estado, "secciones": secciones, "hallazgos": hallazgos,
+        "impactos_adendas": impactos,
+        "aviso": "Hallazgos automáticos sin confirmar. Una mención en una adenda no prueba por sí sola que el requisito cambió.",
+    }
 
 
 def hallazgos_a_requisitos(lectura: dict, confirmados: dict | set | list) -> list[dict]:

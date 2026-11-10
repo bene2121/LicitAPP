@@ -351,7 +351,7 @@ def _paso_documentos(perfil: dict) -> None:
 # ── 3. Evaluación previa ────────────────────────────────────────────────────
 def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
     from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total, ficha_decision
-    from m7_competencia.entidad import analizar_entidad, extraer_requisitos_pdf, hallazgos_a_requisitos
+    from m7_competencia.entidad import analizar_entidad, extraer_requisitos_documentos, hallazgos_a_requisitos
 
     proceso = st.session_state.get("proceso_seleccionado") or {}
     proceso_id = str(proceso.get("id") or proceso.get("referencia") or "proceso")
@@ -379,13 +379,14 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
                     "indicadores, personal y causales de rechazo. No reemplaza las tablas ni las adendas.")
         # AppTest no implementa el estado binario de file_uploader; el cliente falso
         # solo se inyecta en pruebas y no existe en la aplicación instalada.
-        pliego = None if "_cliente_secop_pruebas" in st.session_state else st.file_uploader(
-            "Pliego de condiciones en PDF", type=["pdf"], key=f"eval_pliego_{proceso_id}")
-        if pliego and st.button("Analizar pliego", key=f"eval_analizar_pliego_{proceso_id}"):
-            with st.spinner("Leyendo el pliego…"):
+        pliegos = [] if "_cliente_secop_pruebas" in st.session_state else st.file_uploader(
+            "Pliego, anexos y adendas en PDF", type=["pdf"], accept_multiple_files=True,
+            key=f"eval_pliego_{proceso_id}")
+        if pliegos and st.button("Analizar documentos", key=f"eval_analizar_pliego_{proceso_id}"):
+            with st.spinner("Leyendo el expediente…"):
                 try:
-                    st.session_state[f"pliego_resultado_{proceso_id}"] = extraer_requisitos_pdf(
-                        pliego.getvalue(), documento=pliego.name)
+                    st.session_state[f"pliego_resultado_{proceso_id}"] = extraer_requisitos_documentos(
+                        [(archivo.name, archivo.getvalue()) for archivo in pliegos])
                 except ValueError as exc:
                     st.error(str(exc))
         lectura = st.session_state.get(f"pliego_resultado_{proceso_id}")
@@ -396,6 +397,17 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
                        f"legibles: {lectura['legibles']} · cobertura: {lectura.get('cobertura', 0)} % · "
                        f"estado: {estados.get(lectura.get('estado_lectura'), 'Sin verificar')}")
             st.warning(lectura["aviso"])
+            if lectura.get("documentos"):
+                st.dataframe([{
+                    "Documento": x.get("documento"), "Páginas": x.get("paginas"),
+                    "Páginas legibles": x.get("legibles"), "Cobertura": f"{x.get('cobertura', 0)} %",
+                    "Estado": estados.get(x.get("estado_lectura"), "Sin verificar"),
+                } for x in lectura["documentos"]], hide_index=True, width="stretch")
+            if lectura.get("impactos_adendas"):
+                st.error("Posibles impactos encontrados en documentos llamados 'adenda'. Debes compararlos con la versión anterior.")
+                for impacto in lectura["impactos_adendas"]:
+                    st.caption(f"{impacto['documento']}, p. {impacto['pagina']} · {impacto['categoria']}: "
+                               f"…{impacto['texto']}…")
             if not lectura["secciones"]:
                 st.info("No se localizaron secciones automáticamente. Revisa el PDF completo y sus anexos.")
             confirmados = dict(previa.get("hallazgos_confirmados") or {})
