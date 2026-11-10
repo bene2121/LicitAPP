@@ -196,6 +196,27 @@ def test_evaluacion_experiencia_financiera_y_juridica():
     assert total["cumple"] and total["porcentaje"] == 100
 
 
+def test_ficha_decision_es_conservadora_y_trazable():
+    from m6_propuesta.evaluacion import ficha_decision
+    resultado = {"cumple": True, "criterios": []}
+    matriz = [{"requisito": "Certificado", "estado": "Cumple", "critico": True,
+               "fuente": "Pliego p. 12", "evidencia": "certificado.pdf"}]
+    ficha = ficha_decision(resultado, matriz, {"ingreso": 100, "costos": 90, "margen_minimo": 5})
+    assert ficha["decision"] == "PARTICIPAR" and ficha["margen"] == 10
+
+    sin_evidencia = ficha_decision(resultado, [{**matriz[0], "evidencia": ""}],
+                                    {"ingreso": 100, "costos": 90, "margen_minimo": 5})
+    assert sin_evidencia["decision"] == "REVISAR"
+    assert any("evidencia" in x.lower() for x in sin_evidencia["pendientes"])
+
+    # Un cálculo negativo no descarta silenciosamente; requiere confirmación humana.
+    bajo_margen = ficha_decision(resultado, matriz, {"ingreso": 100, "costos": 99, "margen_minimo": 5})
+    assert bajo_margen["decision"] == "REVISAR"
+    descartada = ficha_decision(resultado, matriz, {"ingreso": 100, "costos": 90, "margen_minimo": 5},
+                                {"confirmado": True, "detalle": "No cumple licencia obligatoria"})
+    assert descartada["decision"] == "DESCARTAR"
+
+
 def test_historial_entidad_agrupa_oferentes_y_adjudicatarios():
     from datetime import date
     from m7_competencia.entidad import analizar_entidad

@@ -350,7 +350,7 @@ def _paso_documentos(perfil: dict) -> None:
 
 # ── 3. Evaluación previa ────────────────────────────────────────────────────
 def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
-    from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total
+    from m6_propuesta.evaluacion import evaluar_experiencia, evaluar_financiero, evaluar_total, ficha_decision
     from m7_competencia.entidad import analizar_entidad, extraer_requisitos_pdf
 
     proceso = st.session_state.get("proceso_seleccionado") or {}
@@ -486,14 +486,55 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
         ]:
             juridicos[clave] = st.checkbox(texto, value=bool(jur_previa.get(clave)), key=f"eval_jur_{clave}")
 
+    with st.expander("4. Matriz trazable de requisitos", expanded=True):
+        st.caption("Registra cada exigencia con su página exacta, evidencia, responsable y fecha. "
+                   "'Cumple' sin evidencia seguirá apareciendo como pendiente.")
+        matriz_base = previa.get("matriz_requisitos") or []
+        matriz_df = st.data_editor(
+            pd.DataFrame(matriz_base, columns=["requisito", "grupo", "estado", "critico", "fuente",
+                                               "evidencia", "responsable", "fecha_limite"]),
+            num_rows="dynamic", width="stretch", key="eval_matriz_requisitos",
+            column_config={
+                "requisito": "Requisito del pliego", "grupo": "Grupo",
+                "estado": st.column_config.SelectboxColumn("Estado", options=["Pendiente", "Cumple", "No cumple", "No aplica"]),
+                "critico": st.column_config.CheckboxColumn("Crítico / causal de rechazo"),
+                "fuente": "Documento y página", "evidencia": "Archivo o soporte",
+                "responsable": "Responsable", "fecha_limite": "Fecha límite",
+            })
+
+    with st.expander("5. Viabilidad económica y decisión"):
+        eco_previa = previa.get("economia") or {}
+        e1, e2, e3 = st.columns(3)
+        ingreso_estimado = e1.number_input("Ingreso / oferta estimada", min_value=0.0,
+                                           value=float(eco_previa.get("ingreso") or po or 0), step=100000.0,
+                                           key="eval_eco_ingreso")
+        costos_estimados = e2.number_input("Costo total estimado", min_value=0.0,
+                                           value=float(eco_previa.get("costos") or 0), step=100000.0,
+                                           key="eval_eco_costos",
+                                           help="Incluye ejecución, impuestos, logística, garantías y financiación.")
+        margen_minimo = e3.number_input("Margen mínimo aceptable (%)", min_value=0.0, max_value=100.0,
+                                        value=float(eco_previa.get("margen_minimo") or 5), step=0.5,
+                                        key="eval_eco_margen")
+        blocker_previo = previa.get("blocker") or {}
+        blocker_confirmado = st.checkbox("Confirmo que existe un impedimento crítico e insubsanable",
+                                         value=bool(blocker_previo.get("confirmado")), key="eval_blocker")
+        blocker_detalle = st.text_input("Impedimento confirmado (obligatorio para recomendar descartar)",
+                                        value=str(blocker_previo.get("detalle") or ""), key="eval_blocker_detalle",
+                                        disabled=not blocker_confirmado)
+
     if st.button("Evaluar requisitos", type="primary", key="eval_calcular"):
         contratos = [r for r in contratos_df.to_dict("records") if str(r.get("contrato") or r.get("objeto") or "").strip()]
         requisito = {"pct_total": pct_total, "pct_especifica": pct_especifica, "max_contratos": max_contratos}
         experiencia = evaluar_experiencia(requisito, contratos, po)
         financiero = evaluar_financiero(financieros)
         total = evaluar_total(experiencia, financiero, juridicos)
+        matriz = [r for r in matriz_df.to_dict("records") if str(r.get("requisito") or "").strip()]
+        economia = {"ingreso": ingreso_estimado, "costos": costos_estimados, "margen_minimo": margen_minimo}
+        blocker = {"confirmado": blocker_confirmado, "detalle": blocker_detalle}
+        decision = ficha_decision(total, matriz, economia, blocker)
         evaluacion = {"requisito": requisito, "contratos": contratos, "financiero": financieros,
-                      "juridicos": juridicos, "resultado": total}
+                      "juridicos": juridicos, "matriz_requisitos": matriz, "economia": economia,
+                      "blocker": blocker, "resultado": total, "decision": decision}
         guardadas[proceso_id] = evaluacion
         perfil["evaluaciones_requisitos"] = guardadas
         guardar_perfil(perfil)
@@ -501,6 +542,7 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
 
     evaluacion = st.session_state.get("evaluacion_actual") or previa
     resultado = evaluacion.get("resultado") if isinstance(evaluacion, dict) else None
+    decision = evaluacion.get("decision") if isinstance(evaluacion, dict) else None
     if resultado:
         st.progress(resultado["porcentaje"] / 100, text=f"Cumplimiento preliminar: {resultado['porcentaje']} %")
         filas = [{"Estado": "✅ Cumple" if c["cumple"] else "❌ Pendiente / no cumple",
@@ -512,6 +554,17 @@ def _paso_evaluacion(perfil: dict, guardar_perfil, cliente) -> None:
         else:
             st.warning("Hay requisitos pendientes o incumplidos. Puedes guardar el diagnóstico y completar evidencia, "
                        "pero no debes interpretar este proceso como habilitado todavía.")
+        if decision:
+            colores = {"PARTICIPAR": st.success, "REVISAR": st.warning, "DESCARTAR": st.error}
+            colores[decision["decision"]](f"Recomendación automática: **{decision['decision']}**")
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Cumplimiento", f"{resultado['porcentaje']} %")
+            d2.metric("Margen estimado", "Sin calcular" if decision["margen"] is None else f"{decision['margen']:.2f} %")
+            d3.metric("Pendientes", len(decision["pendientes"]) + len(decision["bloqueos"]))
+            if decision["bloqueos"]:
+                st.error("Bloqueos: " + " · ".join(decision["bloqueos"]))
+            if decision["pendientes"]:
+                st.markdown("**Antes de decidir:**\n\n" + "\n".join(f"- {x}" for x in decision["pendientes"]))
     c1, c2 = st.columns(2)
     if c1.button("⬅ Volver", key="eval_volver"):
         _ir(1)
