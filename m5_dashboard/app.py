@@ -480,6 +480,24 @@ with tab1:
 
     st.markdown("---")
 
+    if filtrados:
+        from m5_dashboard.exportar import a_excel, a_pdf
+        col_xls, col_pdf, _ = st.columns([1, 1, 2])
+        col_xls.download_button(
+            "Descargar Excel",
+            data=a_excel(filtrados),
+            file_name="procesos_licitapp.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="btn_exportar_excel",
+        )
+        col_pdf.download_button(
+            "Descargar PDF",
+            data=a_pdf(filtrados),
+            file_name="procesos_licitapp.pdf",
+            mime="application/pdf",
+            key="btn_exportar_pdf",
+        )
+
     if origen == "vacio":
         pass
     elif not filtrados:
