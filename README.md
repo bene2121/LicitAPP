@@ -2,6 +2,8 @@
 
 Aplicativo para detectar, analizar y ganar licitaciones públicas en Colombia (SECOP I & II).
 
+El siguiente objetivo, después de las notificaciones automáticas, es el **asistente de pre-oferta**. Está descrito en [ROADMAP.md](ROADMAP.md). Aún no está implementado.
+
 ## Instalación
 
 ```bash
