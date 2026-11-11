@@ -1,6 +1,9 @@
 """Consulta en vivo del Explorador: los filtros viajan dentro del pedido a SECOP II."""
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from datetime import datetime, timezone
 
 from m1_ingestor.campos import FASES_ABIERTAS, fila_proceso_s2, soql_literal
@@ -8,6 +11,7 @@ from m1_ingestor.entidades import where_entidad
 from m1_ingestor.secop_client import SecopClient
 
 MAX_VIVO = 400
+CACHE_SEGUNDOS = 180
 _VOCALES = set("AEIOU")
 
 
@@ -50,18 +54,29 @@ def consultar_vivo(
     unspsc: list[str] | None = None,
     modalidades: list[str] | None = None,
     max_records: int = MAX_VIVO,
+    cliente=None,
+    cache_dir: str | None = None,
 ) -> list[dict]:
     """Pide a SECOP II solo lo que cabe en los filtros. Tope 400."""
-    return _consultar(where_vivo(departamentos, unspsc, modalidades), max_records)
+    return _consultar(
+        where_vivo(departamentos, unspsc, modalidades),
+        max_records,
+        cliente=cliente,
+        cache_dir=cache_dir,
+    )
 
 
-def consultar_entidad(nit: str, max_records: int = MAX_VIVO) -> list[dict]:
-    return _consultar(where_entidad(nit), max_records)
+def consultar_entidad(nit: str, max_records: int = MAX_VIVO, cliente=None, cache_dir: str | None = None) -> list[dict]:
+    return _consultar(where_entidad(nit), max_records, cliente=cliente, cache_dir=cache_dir)
 
 
-def _consultar(where: str, max_records: int) -> list[dict]:
+def _consultar(where: str, max_records: int, cliente=None, cache_dir: str | None = None) -> list[dict]:
     tope = min(max_records, MAX_VIVO)
-    cliente = SecopClient()
+    clave = f"{tope}|{where}"
+    guardado = _leer_cache(clave, cache_dir)
+    if guardado is not None:
+        return guardado
+    cliente = cliente or SecopClient()
     registros = cliente.get_procesos_s2(
         filters={
             "$where": where,
@@ -75,7 +90,48 @@ def _consultar(where: str, max_records: int) -> list[dict]:
         fila = fila_proceso_s2(registro, ahora)
         if fila:
             filas.append(fila)
+    _guardar_cache(clave, filas, cache_dir)
     return filas
+
+
+def _directorio_cache(cache_dir: str | None) -> str:
+    destino = cache_dir or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data",
+        "cache_secop",
+    )
+    os.makedirs(destino, exist_ok=True)
+    return destino
+
+
+def _ruta_cache(clave: str, cache_dir: str | None) -> str:
+    nombre = hashlib.sha256(clave.encode("utf-8")).hexdigest() + ".json"
+    return os.path.join(_directorio_cache(cache_dir), nombre)
+
+
+def _leer_cache(clave: str, cache_dir: str | None) -> list[dict] | None:
+    ruta = _ruta_cache(clave, cache_dir)
+    if not os.path.exists(ruta):
+        return None
+    try:
+        with open(ruta, encoding="utf-8") as archivo:
+            dato = json.load(archivo)
+        edad = datetime.now(timezone.utc).timestamp() - float(dato["guardado"])
+        if edad > CACHE_SEGUNDOS:
+            return None
+        filas = dato.get("filas")
+        return filas if isinstance(filas, list) else None
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _guardar_cache(clave: str, filas: list[dict], cache_dir: str | None) -> None:
+    ruta = _ruta_cache(clave, cache_dir)
+    with open(ruta, "w", encoding="utf-8") as archivo:
+        json.dump(
+            {"guardado": datetime.now(timezone.utc).timestamp(), "filas": filas},
+            archivo,
+        )
 
 
 def _likes(columna: str, valores: list[str]) -> str:
