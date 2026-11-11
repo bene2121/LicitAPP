@@ -295,60 +295,62 @@ with tab1:
     with st.sidebar:
         st.markdown("## 🔍 Filtros")
         perfil_filtros = st.session_state.perfil
-        usar_perfil = st.toggle("Aplicar filtros de mi perfil", value=True, key="usar_perfil_tog")
         if st.button("🗑️ Limpiar todos los filtros", key="btn_limpiar"):
             for k in ["deptos_sel_adv","modal_sel_adv","estado_sel_adv","unspsc_sel_adv",
                       "mun_txt_adv","ent_txt_adv","texto_busq_adv","dias_max_adv",
-                      "score_min_adv","fuente_sel_adv"]:
+                      "score_min_adv","fuente_sel_adv","usar_perfil_tog","rango_ppto"]:
                 if k in st.session_state:
                     del st.session_state[k]
             st.rerun()
 
-        texto_busq = st.text_input("🔍 Buscar objeto / entidad / ID",
-                                   placeholder="pavimentación, IDU, CO1.BDOS...",
-                                   key="texto_busq_adv")
+        with st.form("filtros_explorador"):
+            usar_perfil = st.checkbox("Aplicar filtros de mi perfil", value=True, key="usar_perfil_tog")
+            texto_busq = st.text_input("🔍 Buscar objeto / entidad / ID",
+                                       placeholder="pavimentación, IDU, CO1.BDOS...",
+                                       key="texto_busq_adv")
 
-        st.markdown("**📍 Geografía**")
-        deptos_sel = st.multiselect(
-            "Departamento", DEPARTAMENTOS_CO, key="deptos_sel_adv",
-            default=perfil_filtros.get("departamentos", []) if usar_perfil else [],
-        )
-        municipio_txt = st.text_input("Municipio", placeholder="Zipaquirá, Chía...", key="mun_txt_adv")
+            st.markdown("**📍 Geografía**")
+            deptos_sel = st.multiselect(
+                "Departamento", DEPARTAMENTOS_CO, key="deptos_sel_adv",
+                default=perfil_filtros.get("departamentos", []) if usar_perfil else [],
+            )
+            municipio_txt = st.text_input("Municipio", placeholder="Zipaquirá, Chía...", key="mun_txt_adv")
 
-        st.markdown("**🏗️ Sector UNSPSC**")
-        unspsc_sel_labels = st.multiselect(
-            "Sector / Código UNSPSC", list(UNSPSC_FAMILIAS.keys()),
-            default=[k for k, v in UNSPSC_FAMILIAS.items()
-                     if v in perfil_filtros.get("sectores_unspsc", [])] if usar_perfil else [],
-            key="unspsc_sel_adv",
-        )
+            st.markdown("**🏗️ Sector UNSPSC**")
+            unspsc_sel_labels = st.multiselect(
+                "Sector / Código UNSPSC", list(UNSPSC_FAMILIAS.keys()),
+                default=[k for k, v in UNSPSC_FAMILIAS.items()
+                         if v in perfil_filtros.get("sectores_unspsc", [])] if usar_perfil else [],
+                key="unspsc_sel_adv",
+            )
+
+            st.markdown("**📋 Proceso**")
+            modal_sel  = st.multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
+            estado_sel = st.multiselect(
+                "Estado", ESTADOS, key="estado_sel_adv",
+                default=["Presentación de oferta", "Fase de ofertas"] if usar_perfil else [],
+            )
+            fuente_sel = st.radio(
+                "Fuente",
+                ["Ambas", "SECOP II", "Ecopetrol", "Findeter"],
+                horizontal=True,
+                key="fuente_sel_adv",
+            )
+            entidad_txt = st.text_input("Entidad contratante", placeholder="IDU, Gobernación...",
+                                        key="ent_txt_adv")
+
+            st.markdown("**💰 Presupuesto Oficial**")
+            po_def_min = int(perfil_filtros.get("presupuesto_min", 0)) if usar_perfil else 0
+            po_def_max = int(perfil_filtros.get("presupuesto_max", 2_000_000_000)) if usar_perfil else 2_000_000_000
+            rango_ppto = st.slider(
+                "Rango COP", 0, 2_000_000_000, (po_def_min, po_def_max),
+                step=5_000_000, format="$%d", key="rango_ppto",
+                label_visibility="collapsed",
+            )
+            dias_max    = st.slider("Días máx. al cierre", 1, 180, 90, key="dias_max_adv")
+            score_min_f = st.slider("Score mínimo", 0, 100, 60, key="score_min_adv")
+            st.form_submit_button("Aplicar filtros")
         unspsc_codes = [UNSPSC_FAMILIAS[l] for l in unspsc_sel_labels]
-
-        st.markdown("**📋 Proceso**")
-        modal_sel  = st.multiselect("Modalidad", MODALIDADES, key="modal_sel_adv")
-        estado_sel = st.multiselect(
-            "Estado", ESTADOS, key="estado_sel_adv",
-            default=["Presentación de oferta", "Fase de ofertas"] if usar_perfil else [],
-        )
-        fuente_sel = st.radio(
-            "Fuente",
-            ["Ambas", "SECOP II", "Ecopetrol", "Findeter"],
-            horizontal=True,
-            key="fuente_sel_adv",
-        )
-        entidad_txt = st.text_input("Entidad contratante", placeholder="IDU, Gobernación...",
-                                    key="ent_txt_adv")
-
-        st.markdown("**💰 Presupuesto Oficial**")
-        po_def_min = int(perfil_filtros.get("presupuesto_min", 0)) if usar_perfil else 0
-        po_def_max = int(perfil_filtros.get("presupuesto_max", 2_000_000_000)) if usar_perfil else 2_000_000_000
-        rango_ppto = st.slider(
-            "Rango COP", 0, 2_000_000_000, (po_def_min, po_def_max),
-            step=5_000_000, format="$%d", key="rango_ppto",
-            label_visibility="collapsed",
-        )
-        dias_max    = st.slider("Días máx. al cierre", 1, 180, 90, key="dias_max_adv")
-        score_min_f = st.slider("Score mínimo", 0, 100, 60, key="score_min_adv")
 
     # Construir filtros para la API
     filtros_api = {}
@@ -385,7 +387,29 @@ with tab1:
     # Eliminar claves con valor None
     filtros_api = {k: v for k, v in filtros_api.items() if v is not None}
 
-    procesos_todos, origen = cargar_procesos_api(filtros_api)
+    from m1_ingestor.secop_client import SecopRequestError
+    from m1_ingestor.vivo import consultar_entidad, consultar_vivo
+    clave_viva = (
+        tuple(deptos_sel), tuple(unspsc_codes), tuple(modal_sel), fuente_sel,
+    )
+    if st.session_state.get("_clave_viva") != clave_viva:
+        try:
+            with st.spinner("Consultando SECOP II…"):
+                if fuente_especial:
+                    codigo_consulta = "ECOPETROL" if fuente_sel == "Ecopetrol" else "FINDETER"
+                    procesos_todos = consultar_entidad(ENTIDADES[codigo_consulta]["nit"])
+                else:
+                    procesos_todos = consultar_vivo(deptos_sel, unspsc_codes, modal_sel)
+            origen = "secop" if procesos_todos else "vacio"
+        except SecopRequestError as exc_secop:
+            st.error(f"No se pudo consultar SECOP II: {exc_secop}")
+            procesos_todos, origen = [], "vacio"
+        st.session_state["_clave_viva"] = clave_viva
+        st.session_state["_procesos_vivos"] = procesos_todos
+        st.session_state["_origen_vivo"] = origen
+    else:
+        procesos_todos = st.session_state.get("_procesos_vivos", [])
+        origen = st.session_state.get("_origen_vivo", "vacio")
 
     if fuente_especial:
         codigo_fuente = "ECOPETROL" if fuente_sel == "Ecopetrol" else "FINDETER"

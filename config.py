@@ -17,7 +17,7 @@ API_OFERTAS  = f"{SOCRATA_BASE}/wi7w-2nvm.json"
 API_PLURALES = f"{SOCRATA_BASE}/ceth-n4bn.json"
 
 APP_TOKEN = os.getenv("SOCRATA_APP_TOKEN", "")
-PAGE_SIZE = 1000  # registros por pagina
+PAGE_SIZE = 400  # registros por pagina hacia datos.gov.co
 
 # Filtros por defecto (obras civiles)
 UNSPSC_INTERES = os.getenv("UNSPSC_INTERES", "72000000,72100000,72110000,72120000").split(",")
