@@ -1119,6 +1119,60 @@ with tab8:
     st.subheader("📊 Mi Cuenta")
     perfil5 = st.session_state.perfil
 
+    with st.expander("Historial de participaciones y mejores ofertas", expanded=True):
+        from m8_experiencia.historial import agregar_participacion, listar_participaciones
+        from m8_experiencia.ranking import rankear
+        with st.form("historial_participacion"):
+            h1, h2 = st.columns(2)
+            id_part = h1.text_input("ID del proceso", key="hist_id")
+            resultado_part = h2.selectbox(
+                "Resultado",
+                ["adjudicado", "no adjudicado", "desierto"],
+                key="hist_resultado",
+            )
+            objeto_part = st.text_input("Objeto", key="hist_objeto")
+            h3, h4, h5 = st.columns(3)
+            unspsc_part = h3.text_input("UNSPSC", key="hist_unspsc")
+            depto_part = h4.text_input("Departamento", key="hist_depto")
+            valor_part = h5.number_input("Presupuesto (COP)", min_value=0, step=1_000_000, key="hist_valor")
+            if st.form_submit_button("Guardar participación"):
+                try:
+                    agregar_participacion(perfil5, {
+                        "id": id_part,
+                        "objeto": objeto_part,
+                        "unspsc": unspsc_part,
+                        "departamento": depto_part,
+                        "presupuesto": valor_part,
+                        "resultado": resultado_part,
+                    })
+                    guardar_perfil(perfil5)
+                    st.session_state.perfil = perfil5
+                    st.success("Participación guardada.")
+                except ValueError as exc_hist:
+                    st.error(str(exc_hist))
+        historial_emp = listar_participaciones(perfil5)
+        if historial_emp:
+            st.dataframe(historial_emp, use_container_width=True, hide_index=True)
+            mejores = rankear(st.session_state.get("_procesos_vivos") or [], perfil5)
+            mejores = [fila for fila in mejores if fila["afinidad"] > 0][:10]
+            if mejores:
+                st.markdown("**Ofertas nuevas con mayor afinidad**")
+                st.dataframe(
+                    [{
+                        "Afinidad": fila["afinidad"],
+                        "Proceso": fila["id"],
+                        "Entidad": fila["entidad"],
+                        "Objeto": (fila["objeto"] or "")[:80],
+                        "Por qué": ", ".join(fila["razones"]),
+                    } for fila in mejores],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("Aplica filtros en el Explorador para comparar las licitaciones nuevas con este historial.")
+        else:
+            st.caption("Aún no hay participaciones guardadas.")
+
     # ── Licencia ──────────────────────────────────────────────────────────────
     with st.expander("🔑 Información de Licencia", expanded=True):
         lc1, lc2, lc3 = st.columns(3)
